@@ -64,6 +64,23 @@ public class HiveHdfsConfiguration
     public Configuration getConfiguration(HdfsContext context, URI uri)
     {
         // use the same configuration for everything
-        return hadoopConfiguration.get();
+        Configuration conf = hadoopConfiguration.get();
+        if (context.getIdentity().getPrincipal().isPresent()) {
+            String name = context.getIdentity().getPrincipal().get().getName();
+            //there's a presto bug that workers get toString here instead of the actual getName value
+            if (name.contains("V3IOPrincipal")) {
+                String[] tokenparse = name.split("token=");
+                if (tokenparse.length != 2) {
+                    throw new RuntimeException("could not parse token from v3io principal, name=" + name);
+                }
+                else {
+                    conf.set("v3io.client.session.access-key", tokenparse[1].substring(0, tokenparse[1].length() - 1));
+                }
+            }
+            else {
+                conf.set("v3io.client.session.access-key", name);
+            }
+        }
+        return conf;
     }
 }
