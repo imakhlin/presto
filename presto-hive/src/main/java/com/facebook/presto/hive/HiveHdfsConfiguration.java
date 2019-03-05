@@ -16,9 +16,23 @@ package com.facebook.presto.hive;
 import com.facebook.presto.hive.HdfsEnvironment.HdfsContext;
 import org.apache.hadoop.conf.Configuration;
 
+import javax.crypto.Cipher;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.PBEKeySpec;
+import javax.crypto.spec.SecretKeySpec;
 import javax.inject.Inject;
 
 import java.net.URI;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.security.Principal;
+import java.security.Provider;
+import java.security.SecureRandom;
+import java.security.spec.KeySpec;
+import java.util.Base64;
+import java.util.NoSuchElementException;
+import java.util.Optional;
 
 import static com.facebook.presto.hive.util.ConfigurationUtils.copy;
 import static java.util.Objects.requireNonNull;
@@ -65,22 +79,150 @@ public class HiveHdfsConfiguration
     {
         // use the same configuration for everything
         Configuration conf = hadoopConfiguration.get();
+
+        //there's a presto bug that workers get toString here instead of the actual getName value
         if (context.getIdentity().getPrincipal().isPresent()) {
-            String name = context.getIdentity().getPrincipal().get().getName();
-            //there's a presto bug that workers get toString here instead of the actual getName value
+            String token = parseToken(context.getIdentity().getPrincipal());
+            conf.set("v3io.client.session.access-key", token);
+        }
+        return conf;
+    }
+
+    // The following code has been added to support V3IO authentication
+    private String parseToken(Optional<Principal> principalOption)
+    {
+        if (principalOption.isPresent()) {
+            Principal principal = principalOption.get();
+            String name = principal.getName();
             if (name.contains("V3IOPrincipal")) {
-                String[] tokenparse = name.split("token=");
+                String splitter = "uid=";
+                if (name.contains("token=")) {
+                    splitter = "token=";
+                }
+                String[] tokenparse = name.split(splitter);
                 if (tokenparse.length != 2) {
                     throw new RuntimeException("could not parse token from v3io principal, name=" + name);
                 }
                 else {
-                    conf.set("v3io.client.session.access-key", tokenparse[1].substring(0, tokenparse[1].length() - 1));
+                    String encryptedToken = tokenparse[1].substring(0, tokenparse[1].length() - 1);
+                    return new TokenHandler().decrypt(Base64.getDecoder().decode(encryptedToken.getBytes(StandardCharsets.UTF_8)));
                 }
             }
             else {
-                conf.set("v3io.client.session.access-key", name);
+                return name;
             }
         }
-        return conf;
+        throw new NoSuchElementException("No Principal present.");
+    }
+
+    private final class TokenHandler
+    {
+        // TODO: Consider moving key and associated data outside of the source code to make it a little bit more secure.
+        private final byte[] associatedData = "iguazio".getBytes(StandardCharsets.UTF_8);
+        private final byte[] salt = "Cheburashka".getBytes(StandardCharsets.UTF_8);
+        private final String encryptionKey = "this key should be shared with presto-hive module in order to be able to decrypt the token";
+
+        public String decrypt(byte[] encryptedToken)
+        {
+            final byte[] phrase =
+                    new AesGcmEncryption().decrypt(toKey(encryptionKey, salt), encryptedToken, associatedData);
+
+            return new String(phrase);
+        }
+
+        // Convert to 16 bytes key
+        private byte[] toKey(String passPhrase, byte[] salt)
+        {
+            int iterationsCount = 1234;
+            KeySpec spec = new PBEKeySpec(passPhrase.toCharArray(), salt, iterationsCount, 128);
+            try {
+                SecretKeyFactory f = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1");
+                byte[] key = f.generateSecret(spec).getEncoded();
+                return key;
+            }
+            catch (Exception e) {
+                throw new SecurityException("could not encrypt", e);
+            }
+        }
+    }
+
+    @SuppressWarnings("WeakerAccess")
+    private final class AesGcmEncryption
+    {
+        private static final String ALGORITHM = "AES/GCM/NoPadding";
+        private static final int TAG_LENGTH_BIT = 128;
+        private final Provider provider;
+        private ThreadLocal<Cipher> cipherWrapper = new ThreadLocal<>();
+
+        public AesGcmEncryption()
+        {
+            this(new SecureRandom(), null);
+        }
+
+        public AesGcmEncryption(SecureRandom secureRandom, Provider provider)
+        {
+            this.provider = provider;
+        }
+
+        public byte[] decrypt(byte[] rawEncryptionKey, byte[] encryptedData, byte[] associatedData)
+                throws SecurityException
+        {
+            byte[] iv = null;
+            byte[] encrypted = null;
+            try {
+                ByteBuffer byteBuffer = ByteBuffer.wrap(encryptedData);
+
+                int ivLength = byteBuffer.get();
+                iv = new byte[ivLength];
+                byteBuffer.get(iv);
+                encrypted = new byte[byteBuffer.remaining()];
+                byteBuffer.get(encrypted);
+
+                final Cipher cipherDec = getCipher();
+                cipherDec.init(Cipher.DECRYPT_MODE, new SecretKeySpec(rawEncryptionKey, "AES"), new GCMParameterSpec(TAG_LENGTH_BIT, iv));
+                if (associatedData != null) {
+                    cipherDec.updateAAD(associatedData);
+                }
+                return cipherDec.doFinal(encrypted);
+            }
+            catch (Exception e) {
+                throw new SecurityException("could not decrypt", e);
+            }
+            finally {
+                wipe(iv);
+                wipe(encrypted);
+            }
+        }
+
+        private void wipe(byte[] bytes)
+        {
+            if (bytes != null) {
+                SecureRandom random = new SecureRandom();
+                random.nextBytes(bytes);
+            }
+        }
+
+        private Cipher getCipher()
+        {
+            Cipher cipher = cipherWrapper.get();
+            if (cipher == null) {
+                try {
+                    if (provider != null) {
+                        cipher = Cipher.getInstance(ALGORITHM, provider);
+                    }
+                    else {
+                        cipher = Cipher.getInstance(ALGORITHM);
+                    }
+                }
+                catch (Exception e) {
+                    throw new IllegalStateException("could not get cipher instance", e);
+                }
+                cipherWrapper.set(cipher);
+                return cipherWrapper.get();
+            }
+            else {
+                return cipher;
+            }
+        }
     }
 }
