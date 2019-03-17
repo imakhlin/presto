@@ -95,7 +95,7 @@ public class HiveHdfsConfiguration
             Principal principal = principalOption.get();
             String name = principal.getName();
             if (name.contains("V3IOPrincipal")) {
-                String splitter = "uid=";
+                String splitter = "uid:=";
                 String[] tokenparse = name.split(splitter);
                 if (tokenparse.length != 2) {
                     throw new RuntimeException("could not parse token from v3io principal, name=" + name);
