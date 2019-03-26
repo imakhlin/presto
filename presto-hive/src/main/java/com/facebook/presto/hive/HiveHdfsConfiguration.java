@@ -98,7 +98,7 @@ public class HiveHdfsConfiguration
                 String splitter = "uid:=";
                 String[] tokenparse = name.split(splitter);
                 if (tokenparse.length != 2) {
-                    throw new RuntimeException("could not parse token from v3io principal, name=" + name);
+                    throw new RuntimeException(String.format("could not parse token from v3io principal, name='%s', delimiter='%s'", name, splitter));
                 }
                 else {
                     String encryptedToken = tokenparse[1].substring(0, tokenparse[1].length() - 1);
