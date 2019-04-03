@@ -14,6 +14,7 @@
 package com.facebook.presto.hive;
 
 import com.facebook.presto.hive.HdfsEnvironment.HdfsContext;
+import io.airlift.log.Logger;
 import org.apache.hadoop.conf.Configuration;
 
 import javax.crypto.Cipher;
@@ -40,6 +41,7 @@ import static java.util.Objects.requireNonNull;
 public class HiveHdfsConfiguration
         implements HdfsConfiguration
 {
+    private static final Logger log = Logger.get(HiveHdfsConfiguration.class);
     private static final Configuration INITIAL_CONFIGURATION;
 
     static {
@@ -83,8 +85,15 @@ public class HiveHdfsConfiguration
         //there's a presto bug that workers get toString here instead of the actual getName value
         if (context.getIdentity().getPrincipal().isPresent()) {
             String token = parseToken(context.getIdentity().getPrincipal());
-            conf.set("v3io.client.session.access-key", token);
+            final String key = "v3io.client.session.access-key";
+            conf.set(key, token);
+            log.debug("===> HDFS Configuration property [%s] in now set to [%s]", key, conf.get("v3io.client.session.access-key"));
         }
+        else {
+            log.warn("===> There is no V3IO Principal in HDFS context.");
+        }
+
+        log.debug("===> HDFS context: [%s]", context.toString());
         return conf;
     }
 

@@ -34,6 +34,7 @@ import com.google.common.collect.Iterators;
 import com.google.common.collect.Streams;
 import com.google.common.io.CharStreams;
 import com.google.common.util.concurrent.ListenableFuture;
+import io.airlift.log.Logger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -91,6 +92,7 @@ import static org.apache.hadoop.hive.common.FileUtils.HIDDEN_FILES_PATH_FILTER;
 public class BackgroundHiveSplitLoader
         implements HiveSplitLoader
 {
+    private static final Logger log = Logger.get(BackgroundHiveSplitLoader.class);
     private static final ListenableFuture<?> COMPLETED_FUTURE = immediateFuture(null);
 
     private final Table table;
@@ -279,7 +281,26 @@ public class BackgroundHiveSplitLoader
         Path path = new Path(getPartitionLocation(table, partition.getPartition()));
         Configuration configuration = hdfsEnvironment.getConfiguration(hdfsContext, path);
         InputFormat<?, ?> inputFormat = getInputFormat(configuration, schema, false);
-        FileSystem fs = hdfsEnvironment.getFileSystem(hdfsContext, path);
+
+        StringBuilder sb = new StringBuilder();
+        System.getenv().entrySet().forEach(entry -> sb.append(entry).append("\n"));
+        log.debug("===> Environment variables: %s", sb.toString());
+
+        sb.delete(0, sb.length());
+        System.getProperties().forEach((k, v) -> sb.append(k).append("=").append(v).append("\n"));
+
+        log.debug("===> Java Properties: %s", sb.toString());
+        log.debug("===> About to create HDFS with path=%s and context=%s", path, hdfsContext.toString());
+
+        FileSystem fs;
+        try {
+            fs = hdfsEnvironment.getFileSystem(hdfsContext, path);
+        }
+        catch (IOException ioEx) {
+            log.error("===> Unable to get file system from path=%s", path, ioEx);
+            throw ioEx;
+        }
+        log.debug("===> File system, get file status for %s -> %s", path, fs.getFileStatus(path).toString());
 
         if (inputFormat instanceof SymlinkTextInputFormat) {
             if (tableBucketInfo.isPresent()) {

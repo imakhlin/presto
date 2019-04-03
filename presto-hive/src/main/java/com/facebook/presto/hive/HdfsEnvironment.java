@@ -19,6 +19,7 @@ import com.facebook.presto.hive.authentication.GenericExceptionAction;
 import com.facebook.presto.hive.authentication.HdfsAuthentication;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.security.Identity;
+import io.airlift.log.Logger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -33,6 +34,7 @@ import static java.util.Objects.requireNonNull;
 
 public class HdfsEnvironment
 {
+    private static final Logger log = Logger.get(HdfsEnvironment.class);
     static {
         HadoopNative.requireHadoopNative();
         HadoopFileSystemCache.initialize();
