@@ -107,7 +107,7 @@ public class HiveHdfsConfiguration
                                 Base64.getDecoder().decode(encryptedToken.getBytes(StandardCharsets.UTF_8)));
                     } catch (SecurityException se) {
                         throw new RuntimeException(String.format(
-                                "could not decrypt token from v3io principal, name=%s; encrypted token=",
+                                "could not decrypt token from v3io principal, name=%s; encrypted token=%s",
                                 name, encryptedToken), se);
                     }
                     return token;
