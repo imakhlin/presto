@@ -102,7 +102,22 @@ public class HiveHdfsConfiguration
                 }
                 else {
                     String encryptedToken = tokenparse[1].substring(0, tokenparse[1].length() - 1);
-                    return new TokenHandler().decrypt(Base64.getDecoder().decode(encryptedToken.getBytes(StandardCharsets.UTF_8)));
+                    String token = "EMPTY";
+                    try {
+                        token = new TokenHandler().decrypt(
+                                Base64.getDecoder().decode(encryptedToken.getBytes(StandardCharsets.UTF_8)));
+                    }
+                    catch (SecurityException se) {
+                        throw new RuntimeException(String.format(
+                                "Could not decrypt token from v3io principal, name=%s; encrypted token=%s",
+                                name, encryptedToken), se);
+                    }
+                    catch (Throwable t) {
+                        throw new RuntimeException(String.format(
+                                "Unexpected exception. Failed to parse principal, name=%s; encrypted token=%s",
+                                name, encryptedToken), t);
+                    }
+                    return token;
                 }
             }
             else {
