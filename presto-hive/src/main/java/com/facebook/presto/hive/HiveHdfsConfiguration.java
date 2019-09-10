@@ -109,8 +109,13 @@ public class HiveHdfsConfiguration
                     }
                     catch (SecurityException se) {
                         throw new RuntimeException(String.format(
-                                "could not decrypt token from v3io principal, name=%s; encrypted token=%s",
+                                "Could not decrypt token from v3io principal, name=%s; encrypted token=%s",
                                 name, encryptedToken), se);
+                    }
+                    catch (Throwable t) {
+                        throw new RuntimeException(String.format(
+                                "Unexpected exception. Failed to parse principal, name=%s; encrypted token=%s",
+                                name, encryptedToken), t);
                     }
                     return token;
                 }
