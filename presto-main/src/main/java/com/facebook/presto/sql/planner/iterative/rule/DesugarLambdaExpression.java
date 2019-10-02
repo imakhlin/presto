@@ -34,13 +34,12 @@ public class DesugarLambdaExpression
                 projectExpressionRewrite(),
                 aggregationExpressionRewrite(),
                 filterExpressionRewrite(),
-                tableScanExpressionRewrite(),
                 joinExpressionRewrite(),
                 valuesExpressionRewrite());
     }
 
     private static Expression rewrite(Expression expression, Rule.Context context)
     {
-        return LambdaCaptureDesugaringRewriter.rewrite(expression, context.getSymbolAllocator().getTypes(), context.getSymbolAllocator());
+        return LambdaCaptureDesugaringRewriter.rewrite(expression, context.getVariableAllocator());
     }
 }

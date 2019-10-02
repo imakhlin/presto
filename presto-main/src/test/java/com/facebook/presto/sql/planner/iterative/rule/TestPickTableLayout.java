@@ -13,13 +13,13 @@
  */
 package com.facebook.presto.sql.planner.iterative.rule;
 
-import com.facebook.presto.connector.ConnectorId;
-import com.facebook.presto.metadata.TableHandle;
-import com.facebook.presto.metadata.TableLayoutHandle;
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.ConnectorId;
+import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.predicate.Domain;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.planner.iterative.rule.test.BaseRuleTest;
 import com.facebook.presto.testing.TestingTransactionHandle;
@@ -48,22 +48,29 @@ public class TestPickTableLayout
 {
     private PickTableLayout pickTableLayout;
     private TableHandle nationTableHandle;
-    private TableLayoutHandle nationTableLayoutHandle;
+    private TableHandle ordersTableHandle;
     private ConnectorId connectorId;
 
     @BeforeClass
     public void setUpBeforeClass()
     {
-        pickTableLayout = new PickTableLayout(tester().getMetadata());
+        pickTableLayout = new PickTableLayout(tester().getMetadata(), new SqlParser());
 
         connectorId = tester().getCurrentConnectorId();
+
+        TpchTableHandle nationTpchTableHandle = new TpchTableHandle("nation", 1.0);
+        TpchTableHandle orderTpchTableHandle = new TpchTableHandle("orders", 1.0);
+
         nationTableHandle = new TableHandle(
                 connectorId,
-                new TpchTableHandle(connectorId.toString(), "nation", 1.0));
-
-        nationTableLayoutHandle = new TableLayoutHandle(connectorId,
+                nationTpchTableHandle,
                 TestingTransactionHandle.create(),
-                new TpchTableLayoutHandle((TpchTableHandle) nationTableHandle.getConnectorHandle(), TupleDomain.all()));
+                Optional.of(new TpchTableLayoutHandle(nationTpchTableHandle, TupleDomain.all())));
+        ordersTableHandle = new TableHandle(
+                connectorId,
+                orderTpchTableHandle,
+                TestingTransactionHandle.create(),
+                Optional.of(new TpchTableLayoutHandle(orderTpchTableHandle, TupleDomain.all())));
     }
 
     @Test
@@ -71,7 +78,7 @@ public class TestPickTableLayout
     {
         for (Rule<?> rule : pickTableLayout.rules()) {
             tester().assertThat(rule)
-                    .on(p -> p.values(p.symbol("a", BIGINT)))
+                    .on(p -> p.values(p.variable("a", BIGINT)))
                     .doesNotFire();
         }
     }
@@ -82,9 +89,8 @@ public class TestPickTableLayout
         tester().assertThat(pickTableLayout.pickTableLayoutWithoutPredicate())
                 .on(p -> p.tableScan(
                         nationTableHandle,
-                        ImmutableList.of(p.symbol("nationkey", BIGINT)),
-                        ImmutableMap.of(p.symbol("nationkey", BIGINT), new TpchColumnHandle("nationkey", BIGINT)),
-                        Optional.of(nationTableLayoutHandle)))
+                        ImmutableList.of(p.variable("nationkey", BIGINT)),
+                        ImmutableMap.of(p.variable("nationkey", BIGINT), new TpchColumnHandle("nationkey", BIGINT))))
                 .doesNotFire();
     }
 
@@ -92,18 +98,12 @@ public class TestPickTableLayout
     public void eliminateTableScanWhenNoLayoutExist()
     {
         tester().assertThat(pickTableLayout.pickTableLayoutForPredicate())
-                .on(p -> p.filter(expression("nationkey = BIGINT '44'"),
+                .on(p -> p.filter(expression("orderstatus = 'G'"),
                         p.tableScan(
-                                nationTableHandle,
-                                ImmutableList.of(p.symbol("nationkey", BIGINT)),
-                                ImmutableMap.of(p.symbol("nationkey", BIGINT), new TpchColumnHandle("nationkey", BIGINT)),
-                                Optional.of(nationTableLayoutHandle))))
-                .matches(
-                        filter("nationkey = BIGINT '44'",
-                                constrainedTableScanWithTableLayout(
-                                        "nation",
-                                        ImmutableMap.of("nationkey", singleValue(BIGINT, 44L)),
-                                        ImmutableMap.of("nationkey", "nationkey"))));
+                                ordersTableHandle,
+                                ImmutableList.of(p.variable("orderstatus", createVarcharType(1))),
+                                ImmutableMap.of(p.variable("orderstatus", createVarcharType(1)), new TpchColumnHandle("orderstatus", createVarcharType(1))))))
+                .matches(values("A"));
     }
 
     @Test
@@ -114,9 +114,9 @@ public class TestPickTableLayout
                 .on(p -> p.filter(expression("nationkey = BIGINT '44'"),
                         p.tableScan(
                                 nationTableHandle,
-                                ImmutableList.of(p.symbol("nationkey", BIGINT)),
-                                ImmutableMap.of(p.symbol("nationkey", BIGINT), columnHandle),
-                                Optional.of(nationTableLayoutHandle),
+                                ImmutableList.of(p.variable("nationkey", BIGINT)),
+                                ImmutableMap.of(p.variable("nationkey", BIGINT), columnHandle),
+                                TupleDomain.none(),
                                 TupleDomain.none())))
                 .matches(values("A"));
     }
@@ -128,9 +128,9 @@ public class TestPickTableLayout
                 .on(p -> p.filter(expression("nationkey % 17 =  BIGINT '44' AND nationkey % 15 =  BIGINT '43'"),
                         p.tableScan(
                                 nationTableHandle,
-                                ImmutableList.of(p.symbol("nationkey", BIGINT)),
-                                ImmutableMap.of(p.symbol("nationkey", BIGINT), new TpchColumnHandle("nationkey", BIGINT)),
-                                Optional.of(nationTableLayoutHandle),
+                                ImmutableList.of(p.variable("nationkey", BIGINT)),
+                                ImmutableMap.of(p.variable("nationkey", BIGINT), new TpchColumnHandle("nationkey", BIGINT)),
+                                TupleDomain.all(),
                                 TupleDomain.all())))
                 .doesNotFire();
     }
@@ -140,9 +140,13 @@ public class TestPickTableLayout
     {
         tester().assertThat(pickTableLayout.pickTableLayoutWithoutPredicate())
                 .on(p -> p.tableScan(
-                        nationTableHandle,
-                        ImmutableList.of(p.symbol("nationkey", BIGINT)),
-                        ImmutableMap.of(p.symbol("nationkey", BIGINT), new TpchColumnHandle("nationkey", BIGINT))))
+                        new TableHandle(
+                                connectorId,
+                                new TpchTableHandle("nation", 1.0),
+                                TestingTransactionHandle.create(),
+                                Optional.empty()),
+                        ImmutableList.of(p.variable("nationkey", BIGINT)),
+                        ImmutableMap.of(p.variable("nationkey", BIGINT), new TpchColumnHandle("nationkey", BIGINT))))
                 .matches(
                         constrainedTableScanWithTableLayout("nation", ImmutableMap.of(), ImmutableMap.of("nationkey", "nationkey")));
     }
@@ -151,50 +155,44 @@ public class TestPickTableLayout
     public void ruleAddedTableLayoutToFilterTableScan()
     {
         Map<String, Domain> filterConstraint = ImmutableMap.<String, Domain>builder()
-                .put("nationkey", singleValue(BIGINT, 44L))
+                .put("orderstatus", singleValue(createVarcharType(1), utf8Slice("F")))
                 .build();
         tester().assertThat(pickTableLayout.pickTableLayoutForPredicate())
-                .on(p -> p.filter(expression("nationkey = BIGINT '44'"),
+                .on(p -> p.filter(expression("orderstatus = CAST ('F' AS VARCHAR(1))"),
                         p.tableScan(
-                                nationTableHandle,
-                                ImmutableList.of(p.symbol("nationkey", BIGINT)),
-                                ImmutableMap.of(p.symbol("nationkey", BIGINT), new TpchColumnHandle("nationkey", BIGINT)))))
+                                ordersTableHandle,
+                                ImmutableList.of(p.variable("orderstatus", createVarcharType(1))),
+                                ImmutableMap.of(p.variable("orderstatus", createVarcharType(1)), new TpchColumnHandle("orderstatus", createVarcharType(1))))))
                 .matches(
-                        filter("nationkey = BIGINT '44'",
-                                constrainedTableScanWithTableLayout("nation", filterConstraint, ImmutableMap.of("nationkey", "nationkey"))));
+                        constrainedTableScanWithTableLayout("orders", filterConstraint, ImmutableMap.of("orderstatus", "orderstatus")));
     }
 
     @Test
     public void ruleAddedNewTableLayoutIfTableScanHasEmptyConstraint()
     {
         tester().assertThat(pickTableLayout.pickTableLayoutForPredicate())
-                .on(p -> p.filter(expression("nationkey = BIGINT '44'"),
+                .on(p -> p.filter(expression("orderstatus = 'F'"),
                         p.tableScan(
-                                nationTableHandle,
-                                ImmutableList.of(p.symbol("nationkey", BIGINT)),
-                                ImmutableMap.of(p.symbol("nationkey", BIGINT), new TpchColumnHandle("nationkey", BIGINT)),
-                                Optional.of(nationTableLayoutHandle))))
+                                ordersTableHandle,
+                                ImmutableList.of(p.variable("orderstatus", createVarcharType(1))),
+                                ImmutableMap.of(p.variable("orderstatus", createVarcharType(1)), new TpchColumnHandle("orderstatus", createVarcharType(1))))))
                 .matches(
-                        filter("nationkey = BIGINT '44'",
-                                constrainedTableScanWithTableLayout(
-                                        "nation",
-                                        ImmutableMap.of("nationkey", singleValue(BIGINT, 44L)),
-                                        ImmutableMap.of("nationkey", "nationkey"))));
+                        constrainedTableScanWithTableLayout(
+                                "orders",
+                                ImmutableMap.of("orderstatus", singleValue(createVarcharType(1), utf8Slice("F"))),
+                                ImmutableMap.of("orderstatus", "orderstatus")));
     }
 
     @Test
     public void ruleWithPushdownableToTableLayoutPredicate()
     {
-        TableHandle ordersTableHandle = new TableHandle(
-                connectorId,
-                new TpchTableHandle(connectorId.toString(), "orders", 1.0));
         Type orderStatusType = createVarcharType(1);
         tester().assertThat(pickTableLayout.pickTableLayoutForPredicate())
                 .on(p -> p.filter(expression("orderstatus = 'O'"),
                         p.tableScan(
                                 ordersTableHandle,
-                                ImmutableList.of(p.symbol("orderstatus", orderStatusType)),
-                                ImmutableMap.of(p.symbol("orderstatus", orderStatusType), new TpchColumnHandle("orderstatus", orderStatusType)))))
+                                ImmutableList.of(p.variable("orderstatus", orderStatusType)),
+                                ImmutableMap.of(p.variable("orderstatus", orderStatusType), new TpchColumnHandle("orderstatus", orderStatusType)))))
                 .matches(constrainedTableScanWithTableLayout(
                         "orders",
                         ImmutableMap.of("orderstatus", singleValue(orderStatusType, utf8Slice("O"))),
@@ -204,16 +202,13 @@ public class TestPickTableLayout
     @Test
     public void nonDeterministicPredicate()
     {
-        TableHandle ordersTableHandle = new TableHandle(
-                connectorId,
-                new TpchTableHandle(connectorId.toString(), "orders", 1.0));
         Type orderStatusType = createVarcharType(1);
         tester().assertThat(pickTableLayout.pickTableLayoutForPredicate())
                 .on(p -> p.filter(expression("orderstatus = 'O' AND rand() = 0"),
                         p.tableScan(
                                 ordersTableHandle,
-                                ImmutableList.of(p.symbol("orderstatus", orderStatusType)),
-                                ImmutableMap.of(p.symbol("orderstatus", orderStatusType), new TpchColumnHandle("orderstatus", orderStatusType)))))
+                                ImmutableList.of(p.variable("orderstatus", orderStatusType)),
+                                ImmutableMap.of(p.variable("orderstatus", orderStatusType), new TpchColumnHandle("orderstatus", orderStatusType)))))
                 .matches(
                         filter("rand() = 0",
                                 constrainedTableScanWithTableLayout(

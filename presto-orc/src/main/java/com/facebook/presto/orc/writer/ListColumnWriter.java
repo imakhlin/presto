@@ -61,6 +61,7 @@ public class ListColumnWriter
     private final ColumnWriter elementWriter;
 
     private final List<ColumnStatistics> rowGroupColumnStatistics = new ArrayList<>();
+    private long columnStatisticsRetainedSizeInBytes;
 
     private int nonNullValueCount;
 
@@ -140,6 +141,7 @@ public class ListColumnWriter
 
         ColumnStatistics statistics = new ColumnStatistics((long) nonNullValueCount, 0, null, null, null, null, null, null, null, null);
         rowGroupColumnStatistics.add(statistics);
+        columnStatisticsRetainedSizeInBytes += statistics.getRetainedSizeInBytes();
         nonNullValueCount = 0;
 
         ImmutableMap.Builder<Integer, ColumnStatistics> columnStatistics = ImmutableMap.builder();
@@ -227,8 +229,7 @@ public class ListColumnWriter
     @Override
     public long getRetainedBytes()
     {
-        // NOTE: we do not include stats because they should be small and it would be annoying to calculate the size
-        return INSTANCE_SIZE + lengthStream.getRetainedBytes() + presentStream.getRetainedBytes() + elementWriter.getRetainedBytes();
+        return INSTANCE_SIZE + lengthStream.getRetainedBytes() + presentStream.getRetainedBytes() + elementWriter.getRetainedBytes() + columnStatisticsRetainedSizeInBytes;
     }
 
     @Override
@@ -239,6 +240,7 @@ public class ListColumnWriter
         presentStream.reset();
         elementWriter.reset();
         rowGroupColumnStatistics.clear();
+        columnStatisticsRetainedSizeInBytes = 0;
         nonNullValueCount = 0;
     }
 }

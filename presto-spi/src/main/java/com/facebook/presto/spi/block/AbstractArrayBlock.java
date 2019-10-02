@@ -13,11 +13,15 @@
  */
 package com.facebook.presto.spi.block;
 
+import javax.annotation.Nullable;
+
 import static com.facebook.presto.spi.block.ArrayBlock.createArrayBlockInternal;
 import static com.facebook.presto.spi.block.BlockUtil.checkArrayRange;
+import static com.facebook.presto.spi.block.BlockUtil.checkValidPositions;
 import static com.facebook.presto.spi.block.BlockUtil.checkValidRegion;
 import static com.facebook.presto.spi.block.BlockUtil.compactArray;
 import static com.facebook.presto.spi.block.BlockUtil.compactOffsets;
+import static com.facebook.presto.spi.block.BlockUtil.internalPositionInRange;
 
 public abstract class AbstractArrayBlock
         implements Block
@@ -26,8 +30,9 @@ public abstract class AbstractArrayBlock
 
     protected abstract int[] getOffsets();
 
-    protected abstract int getOffsetBase();
+    public abstract int getOffsetBase();
 
+    @Nullable
     protected abstract boolean[] getValueIsNull();
 
     int getOffset(int position)
@@ -101,6 +106,25 @@ public abstract class AbstractArrayBlock
     }
 
     @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
+    {
+        checkValidPositions(positions, getPositionCount());
+        boolean[] used = new boolean[getRawElementBlock().getPositionCount()];
+        int usedPositionCount = 0;
+        for (int i = 0; i < positions.length; ++i) {
+            if (positions[i]) {
+                usedPositionCount++;
+                int valueStart = getOffsets()[getOffsetBase() + i];
+                int valueEnd = getOffsets()[getOffsetBase() + i + 1];
+                for (int j = valueStart; j < valueEnd; ++j) {
+                    used[j] = true;
+                }
+            }
+        }
+        return getRawElementBlock().getPositionsSizeInBytes(used) + ((Integer.BYTES + Byte.BYTES) * (long) usedPositionCount);
+    }
+
+    @Override
     public Block copyRegion(int position, int length)
     {
         int positionCount = getPositionCount();
@@ -111,9 +135,10 @@ public abstract class AbstractArrayBlock
         Block newValues = getRawElementBlock().copyRegion(startValueOffset, endValueOffset - startValueOffset);
 
         int[] newOffsets = compactOffsets(getOffsets(), position + getOffsetBase(), length);
-        boolean[] newValueIsNull = compactArray(getValueIsNull(), position + getOffsetBase(), length);
+        boolean[] valueIsNull = getValueIsNull();
+        boolean[] newValueIsNull = valueIsNull == null ? null : compactArray(valueIsNull, position + getOffsetBase(), length);
 
-        if (newValues == getRawElementBlock() && newOffsets == getOffsets() && newValueIsNull == getValueIsNull()) {
+        if (newValues == getRawElementBlock() && newOffsets == getOffsets() && newValueIsNull == valueIsNull) {
             return this;
         }
         return createArrayBlockInternal(0, length, newValueIsNull, newOffsets, newValues);
@@ -157,10 +182,37 @@ public abstract class AbstractArrayBlock
     }
 
     @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        checkReadablePosition(position);
+
+        if (isNull(position)) {
+            return 0;
+        }
+
+        int startValueOffset = getOffset(position);
+        int endValueOffset = getOffset(position + 1);
+
+        Block rawElementBlock = getRawElementBlock();
+        long size = 0;
+        for (int i = startValueOffset; i < endValueOffset; i++) {
+            size += rawElementBlock.getEstimatedDataSizeForStats(i);
+        }
+        return size;
+    }
+
+    @Override
+    public boolean mayHaveNull()
+    {
+        return getValueIsNull() != null;
+    }
+
+    @Override
     public boolean isNull(int position)
     {
         checkReadablePosition(position);
-        return getValueIsNull()[position + getOffsetBase()];
+        boolean[] valueIsNull = getValueIsNull();
+        return valueIsNull == null ? false : valueIsNull[position + getOffsetBase()];
     }
 
     public <T> T apply(ArrayBlockFunction<T> function, int position)
@@ -182,5 +234,21 @@ public abstract class AbstractArrayBlock
     public interface ArrayBlockFunction<T>
     {
         T apply(Block block, int startPosition, int length);
+    }
+
+    @Override
+    public Block getBlockUnchecked(int internalPosition)
+    {
+        int startValueOffset = getOffsets()[internalPosition];
+        int endValueOffset = getOffsets()[internalPosition + 1];
+        return getRawElementBlock().getRegion(startValueOffset, endValueOffset - startValueOffset);
+    }
+
+    @Override
+    public boolean isNullUnchecked(int internalPosition)
+    {
+        assert mayHaveNull() : "no nulls present";
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return getValueIsNull()[internalPosition];
     }
 }

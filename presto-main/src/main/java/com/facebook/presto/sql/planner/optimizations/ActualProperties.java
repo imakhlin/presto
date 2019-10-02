@@ -13,12 +13,14 @@
  */
 package com.facebook.presto.sql.planner.optimizations;
 
+import com.facebook.presto.Session;
+import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.spi.ConstantProperty;
 import com.facebook.presto.spi.LocalProperty;
-import com.facebook.presto.spi.predicate.NullableValue;
+import com.facebook.presto.spi.relation.ConstantExpression;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.Partitioning;
 import com.facebook.presto.sql.planner.PartitioningHandle;
-import com.facebook.presto.sql.planner.Symbol;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -39,19 +41,20 @@ import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SINGLE_DI
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SOURCE_DISTRIBUTION;
 import static com.facebook.presto.util.MoreLists.filteredCopy;
 import static com.google.common.base.MoreObjects.toStringHelper;
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Iterables.transform;
 import static java.util.Objects.requireNonNull;
 
 public class ActualProperties
 {
     private final Global global;
-    private final List<LocalProperty<Symbol>> localProperties;
-    private final Map<Symbol, NullableValue> constants;
+    private final List<LocalProperty<VariableReferenceExpression>> localProperties;
+    private final Map<VariableReferenceExpression, ConstantExpression> constants;
 
     private ActualProperties(
             Global global,
-            List<? extends LocalProperty<Symbol>> localProperties,
-            Map<Symbol, NullableValue> constants)
+            List<? extends LocalProperty<VariableReferenceExpression>> localProperties,
+            Map<VariableReferenceExpression, ConstantExpression> constants)
     {
         requireNonNull(global, "globalProperties is null");
         requireNonNull(localProperties, "localProperties is null");
@@ -61,15 +64,15 @@ public class ActualProperties
 
         // The constants field implies a ConstantProperty in localProperties (but not vice versa).
         // Let's make sure to include the constants into the local constant properties.
-        Set<Symbol> localConstants = LocalProperties.extractLeadingConstants(localProperties);
+        Set<VariableReferenceExpression> localConstants = LocalProperties.extractLeadingConstants(localProperties);
         localProperties = LocalProperties.stripLeadingConstants(localProperties);
 
-        Set<Symbol> updatedLocalConstants = ImmutableSet.<Symbol>builder()
+        Set<VariableReferenceExpression> updatedLocalConstants = ImmutableSet.<VariableReferenceExpression>builder()
                 .addAll(localConstants)
                 .addAll(constants.keySet())
                 .build();
 
-        List<LocalProperty<Symbol>> updatedLocalProperties = LocalProperties.normalizeAndPrune(ImmutableList.<LocalProperty<Symbol>>builder()
+        List<LocalProperty<VariableReferenceExpression>> updatedLocalProperties = LocalProperties.normalizeAndPrune(ImmutableList.<LocalProperty<VariableReferenceExpression>>builder()
                 .addAll(transform(updatedLocalConstants, ConstantProperty::new))
                 .addAll(localProperties)
                 .build());
@@ -84,7 +87,7 @@ public class ActualProperties
     }
 
     /**
-     * @returns true if the plan will only execute on a single node
+     * @return true if the plan will only execute on a single node
      */
     public boolean isSingleNode()
     {
@@ -96,38 +99,58 @@ public class ActualProperties
         return global.isNullsAndAnyReplicated();
     }
 
-    public boolean isStreamPartitionedOn(Collection<Symbol> columns)
+    public boolean isStreamPartitionedOn(Collection<VariableReferenceExpression> columns)
     {
         return isStreamPartitionedOn(columns, false);
     }
 
-    public boolean isStreamPartitionedOn(Collection<Symbol> columns, boolean nullsAndAnyReplicated)
+    public boolean isStreamPartitionedOn(Collection<VariableReferenceExpression> columns, boolean nullsAndAnyReplicated)
     {
         return global.isStreamPartitionedOn(columns, constants.keySet(), nullsAndAnyReplicated);
     }
 
-    public boolean isNodePartitionedOn(Collection<Symbol> columns)
+    public boolean isNodePartitionedOn(Collection<VariableReferenceExpression> columns)
     {
         return isNodePartitionedOn(columns, false);
     }
 
-    public boolean isNodePartitionedOn(Collection<Symbol> columns, boolean nullsAndAnyReplicated)
+    public boolean isNodePartitionedOn(Collection<VariableReferenceExpression> columns, boolean nullsAndAnyReplicated)
     {
         return global.isNodePartitionedOn(columns, constants.keySet(), nullsAndAnyReplicated);
     }
 
-    public boolean isNodePartitionedOn(Partitioning partitioning, boolean nullsAndAnyReplicated)
+    @Deprecated
+    public boolean isCompatibleTablePartitioningWith(Partitioning partitioning, boolean nullsAndAnyReplicated, Metadata metadata, Session session)
     {
-        return global.isNodePartitionedOn(partitioning, nullsAndAnyReplicated);
+        return global.isCompatibleTablePartitioningWith(partitioning, nullsAndAnyReplicated, metadata, session);
     }
 
-    public boolean isNodePartitionedWith(ActualProperties other, Function<Symbol, Set<Symbol>> symbolMappings)
+    @Deprecated
+    public boolean isCompatibleTablePartitioningWith(ActualProperties other, Function<VariableReferenceExpression, Set<VariableReferenceExpression>> symbolMappings, Metadata metadata, Session session)
     {
-        return global.isNodePartitionedWith(
+        return global.isCompatibleTablePartitioningWith(
                 other.global,
                 symbolMappings,
-                symbol -> Optional.ofNullable(constants.get(symbol)),
-                symbol -> Optional.ofNullable(other.constants.get(symbol)));
+                variable -> Optional.ofNullable(constants.get(variable)),
+                variable -> Optional.ofNullable(other.constants.get(variable)),
+                metadata,
+                session);
+    }
+
+    public boolean isRefinedPartitioningOver(Partitioning partitioning, boolean nullsAndAnyReplicated, Metadata metadata, Session session)
+    {
+        return global.isRefinedPartitioningOver(partitioning, nullsAndAnyReplicated, metadata, session);
+    }
+
+    public boolean isRefinedPartitioningOver(ActualProperties other, Function<VariableReferenceExpression, Set<VariableReferenceExpression>> symbolMappings, Metadata metadata, Session session)
+    {
+        return global.isRefinedPartitioningOver(
+                other.global,
+                symbolMappings,
+                variable -> Optional.ofNullable(constants.get(variable)),
+                variable -> Optional.ofNullable(other.constants.get(variable)),
+                metadata,
+                session);
     }
 
     /**
@@ -141,16 +164,16 @@ public class ActualProperties
     /**
      * @return true if repartitioning on the keys will yield some difference
      */
-    public boolean isStreamRepartitionEffective(Collection<Symbol> keys)
+    public boolean isStreamRepartitionEffective(Collection<VariableReferenceExpression> keys)
     {
         return global.isStreamRepartitionEffective(keys, constants.keySet());
     }
 
-    public ActualProperties translate(Function<Symbol, Optional<Symbol>> translator)
+    public ActualProperties translate(Function<VariableReferenceExpression, Optional<VariableReferenceExpression>> translator)
     {
-        Map<Symbol, NullableValue> translatedConstants = new HashMap<>();
-        for (Map.Entry<Symbol, NullableValue> entry : constants.entrySet()) {
-            Optional<Symbol> translatedKey = translator.apply(entry.getKey());
+        Map<VariableReferenceExpression, ConstantExpression> translatedConstants = new HashMap<>();
+        for (Map.Entry<VariableReferenceExpression, ConstantExpression> entry : constants.entrySet()) {
+            Optional<VariableReferenceExpression> translatedKey = translator.apply(entry.getKey());
             if (translatedKey.isPresent()) {
                 translatedConstants.put(translatedKey.get(), entry.getValue());
             }
@@ -167,12 +190,12 @@ public class ActualProperties
         return global.getNodePartitioning();
     }
 
-    public Map<Symbol, NullableValue> getConstants()
+    public Map<VariableReferenceExpression, ConstantExpression> getConstants()
     {
         return constants;
     }
 
-    public List<LocalProperty<Symbol>> getLocalProperties()
+    public List<LocalProperty<VariableReferenceExpression>> getLocalProperties()
     {
         return localProperties;
     }
@@ -197,8 +220,8 @@ public class ActualProperties
     public static class Builder
     {
         private Global global;
-        private List<LocalProperty<Symbol>> localProperties;
-        private Map<Symbol, NullableValue> constants;
+        private List<LocalProperty<VariableReferenceExpression>> localProperties;
+        private Map<VariableReferenceExpression, ConstantExpression> constants;
         private boolean unordered;
 
         public Builder()
@@ -206,7 +229,7 @@ public class ActualProperties
             this(Global.arbitraryPartition(), ImmutableList.of(), ImmutableMap.of());
         }
 
-        public Builder(Global global, List<LocalProperty<Symbol>> localProperties, Map<Symbol, NullableValue> constants)
+        public Builder(Global global, List<LocalProperty<VariableReferenceExpression>> localProperties, Map<VariableReferenceExpression, ConstantExpression> constants)
         {
             this.global = requireNonNull(global, "global is null");
             this.localProperties = ImmutableList.copyOf(localProperties);
@@ -225,13 +248,13 @@ public class ActualProperties
             return this;
         }
 
-        public Builder local(List<? extends LocalProperty<Symbol>> localProperties)
+        public Builder local(List<? extends LocalProperty<VariableReferenceExpression>> localProperties)
         {
             this.localProperties = ImmutableList.copyOf(localProperties);
             return this;
         }
 
-        public Builder constants(Map<Symbol, NullableValue> constants)
+        public Builder constants(Map<VariableReferenceExpression, ConstantExpression> constants)
         {
             this.constants = ImmutableMap.copyOf(constants);
             return this;
@@ -245,7 +268,7 @@ public class ActualProperties
 
         public ActualProperties build()
         {
-            List<LocalProperty<Symbol>> localProperties = this.localProperties;
+            List<LocalProperty<VariableReferenceExpression>> localProperties = this.localProperties;
             if (unordered) {
                 localProperties = filteredCopy(this.localProperties, property -> !property.isOrderSensitive());
             }
@@ -301,6 +324,11 @@ public class ActualProperties
 
         private Global(Optional<Partitioning> nodePartitioning, Optional<Partitioning> streamPartitioning, boolean nullsAndAnyReplicated)
         {
+            checkArgument(!nodePartitioning.isPresent()
+                            || !streamPartitioning.isPresent()
+                            || nodePartitioning.get().getVariableReferences().containsAll(streamPartitioning.get().getVariableReferences())
+                            || streamPartitioning.get().getVariableReferences().containsAll(nodePartitioning.get().getVariableReferences()),
+                    "Global stream partitioning columns should match node partitioning columns");
             this.nodePartitioning = requireNonNull(nodePartitioning, "nodePartitioning is null");
             this.streamPartitioning = requireNonNull(streamPartitioning, "streamPartitioning is null");
             this.nullsAndAnyReplicated = nullsAndAnyReplicated;
@@ -327,7 +355,10 @@ public class ActualProperties
             return new Global(Optional.empty(), Optional.empty(), false);
         }
 
-        public static Global partitionedOn(PartitioningHandle nodePartitioningHandle, List<Symbol> nodePartitioning, Optional<List<Symbol>> streamPartitioning)
+        public static Global partitionedOn(
+                PartitioningHandle nodePartitioningHandle,
+                List<VariableReferenceExpression> nodePartitioning,
+                Optional<List<VariableReferenceExpression>> streamPartitioning)
         {
             return new Global(
                     Optional.of(Partitioning.create(nodePartitioningHandle, nodePartitioning)),
@@ -343,7 +374,7 @@ public class ActualProperties
                     false);
         }
 
-        public static Global streamPartitionedOn(List<Symbol> streamPartitioning)
+        public static Global streamPartitionedOn(List<VariableReferenceExpression> streamPartitioning)
         {
             return new Global(
                     Optional.empty(),
@@ -362,7 +393,7 @@ public class ActualProperties
         }
 
         /**
-         * @returns true if the plan will only execute on a single node
+         * @return true if the plan will only execute on a single node
          */
         private boolean isSingleNode()
         {
@@ -382,29 +413,58 @@ public class ActualProperties
             return nodePartitioning.get().getHandle().isCoordinatorOnly();
         }
 
-        private boolean isNodePartitionedOn(Collection<Symbol> columns, Set<Symbol> constants, boolean nullsAndAnyReplicated)
+        private boolean isNodePartitionedOn(Collection<VariableReferenceExpression> columns, Set<VariableReferenceExpression> constants, boolean nullsAndAnyReplicated)
         {
             return nodePartitioning.isPresent() && nodePartitioning.get().isPartitionedOn(columns, constants) && this.nullsAndAnyReplicated == nullsAndAnyReplicated;
         }
 
-        private boolean isNodePartitionedOn(Partitioning partitioning, boolean nullsAndAnyReplicated)
+        private boolean isCompatibleTablePartitioningWith(Partitioning partitioning, boolean nullsAndAnyReplicated, Metadata metadata, Session session)
         {
-            return nodePartitioning.isPresent() && nodePartitioning.get().equals(partitioning) && this.nullsAndAnyReplicated == nullsAndAnyReplicated;
+            return nodePartitioning.isPresent() && nodePartitioning.get().isCompatibleWith(partitioning, metadata, session) && this.nullsAndAnyReplicated == nullsAndAnyReplicated;
         }
 
-        private boolean isNodePartitionedWith(
+        private boolean isCompatibleTablePartitioningWith(
                 Global other,
-                Function<Symbol, Set<Symbol>> symbolMappings,
-                Function<Symbol, Optional<NullableValue>> leftConstantMapping,
-                Function<Symbol, Optional<NullableValue>> rightConstantMapping)
+                Function<VariableReferenceExpression, Set<VariableReferenceExpression>> symbolMappings,
+                Function<VariableReferenceExpression, Optional<ConstantExpression>> leftConstantMapping,
+                Function<VariableReferenceExpression, Optional<ConstantExpression>> rightConstantMapping,
+                Metadata metadata,
+                Session session)
         {
             return nodePartitioning.isPresent() &&
                     other.nodePartitioning.isPresent() &&
-                    nodePartitioning.get().isPartitionedWith(
+                    nodePartitioning.get().isCompatibleWith(
                             other.nodePartitioning.get(),
                             symbolMappings,
                             leftConstantMapping,
-                            rightConstantMapping) &&
+                            rightConstantMapping,
+                            metadata,
+                            session) &&
+                    nullsAndAnyReplicated == other.nullsAndAnyReplicated;
+        }
+
+        private boolean isRefinedPartitioningOver(Partitioning partitioning, boolean nullsAndAnyReplicated, Metadata metadata, Session session)
+        {
+            return nodePartitioning.isPresent() && nodePartitioning.get().isRefinedPartitioningOver(partitioning, metadata, session) && this.nullsAndAnyReplicated == nullsAndAnyReplicated;
+        }
+
+        private boolean isRefinedPartitioningOver(
+                Global other,
+                Function<VariableReferenceExpression, Set<VariableReferenceExpression>> symbolMappings,
+                Function<VariableReferenceExpression, Optional<ConstantExpression>> leftConstantMapping,
+                Function<VariableReferenceExpression, Optional<ConstantExpression>> rightConstantMapping,
+                Metadata metadata,
+                Session session)
+        {
+            return nodePartitioning.isPresent() &&
+                    other.nodePartitioning.isPresent() &&
+                    nodePartitioning.get().isRefinedPartitioningOver(
+                            other.nodePartitioning.get(),
+                            symbolMappings,
+                            leftConstantMapping,
+                            rightConstantMapping,
+                            metadata,
+                            session) &&
                     nullsAndAnyReplicated == other.nullsAndAnyReplicated;
         }
 
@@ -413,7 +473,7 @@ public class ActualProperties
             return nodePartitioning;
         }
 
-        private boolean isStreamPartitionedOn(Collection<Symbol> columns, Set<Symbol> constants, boolean nullsAndAnyReplicated)
+        private boolean isStreamPartitionedOn(Collection<VariableReferenceExpression> columns, Set<VariableReferenceExpression> constants, boolean nullsAndAnyReplicated)
         {
             return streamPartitioning.isPresent() && streamPartitioning.get().isPartitionedOn(columns, constants) && this.nullsAndAnyReplicated == nullsAndAnyReplicated;
         }
@@ -421,7 +481,7 @@ public class ActualProperties
         /**
          * @return true if all the data will effectively land in a single stream
          */
-        private boolean isEffectivelySingleStream(Set<Symbol> constants)
+        private boolean isEffectivelySingleStream(Set<VariableReferenceExpression> constants)
         {
             return streamPartitioning.isPresent() && streamPartitioning.get().isEffectivelySinglePartition(constants) && !nullsAndAnyReplicated;
         }
@@ -429,12 +489,14 @@ public class ActualProperties
         /**
          * @return true if repartitioning on the keys will yield some difference
          */
-        private boolean isStreamRepartitionEffective(Collection<Symbol> keys, Set<Symbol> constants)
+        private boolean isStreamRepartitionEffective(Collection<VariableReferenceExpression> keys, Set<VariableReferenceExpression> constants)
         {
             return (!streamPartitioning.isPresent() || streamPartitioning.get().isRepartitionEffective(keys, constants)) && !nullsAndAnyReplicated;
         }
 
-        private Global translate(Function<Symbol, Optional<Symbol>> translator, Function<Symbol, Optional<NullableValue>> constants)
+        private Global translate(
+                Function<VariableReferenceExpression, Optional<VariableReferenceExpression>> translator,
+                Function<VariableReferenceExpression, Optional<ConstantExpression>> constants)
         {
             return new Global(
                     nodePartitioning.flatMap(partitioning -> partitioning.translate(translator, constants)),

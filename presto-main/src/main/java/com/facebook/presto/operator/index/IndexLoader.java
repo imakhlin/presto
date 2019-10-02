@@ -13,9 +13,8 @@
  */
 package com.facebook.presto.operator.index;
 
-import com.facebook.presto.ScheduledSplit;
-import com.facebook.presto.TaskSource;
-import com.facebook.presto.connector.ConnectorId;
+import com.facebook.presto.execution.ScheduledSplit;
+import com.facebook.presto.execution.TaskSource;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.operator.Driver;
 import com.facebook.presto.operator.DriverFactory;
@@ -23,12 +22,13 @@ import com.facebook.presto.operator.LookupSource;
 import com.facebook.presto.operator.PagesIndex;
 import com.facebook.presto.operator.PipelineContext;
 import com.facebook.presto.operator.TaskContext;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.gen.JoinCompiler;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
@@ -249,7 +249,7 @@ public class IndexLoader
         if (pipelineContext == null) {
             TaskContext taskContext = taskContextReference.get();
             checkState(taskContext != null, "Task context must be set before index can be built");
-            pipelineContext = taskContext.addPipelineContext(indexBuildDriverFactoryProvider.getPipelineId(), false, false);
+            pipelineContext = taskContext.addPipelineContext(indexBuildDriverFactoryProvider.getPipelineId(), true, true, false);
         }
         if (indexSnapshotLoader == null) {
             indexSnapshotLoader = new IndexSnapshotLoader(

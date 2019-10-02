@@ -13,12 +13,12 @@
  */
 package com.facebook.presto.connector.thrift.api;
 
+import com.facebook.drift.TException;
+import com.facebook.drift.annotations.ThriftException;
+import com.facebook.drift.annotations.ThriftField;
+import com.facebook.drift.annotations.ThriftMethod;
+import com.facebook.drift.annotations.ThriftService;
 import com.google.common.util.concurrent.ListenableFuture;
-import io.airlift.drift.TException;
-import io.airlift.drift.annotations.ThriftException;
-import io.airlift.drift.annotations.ThriftField;
-import io.airlift.drift.annotations.ThriftMethod;
-import io.airlift.drift.annotations.ThriftService;
 
 import java.util.List;
 
@@ -85,7 +85,7 @@ public interface PrestoThriftService
      * @param schemaTableName schema and table name
      * @param indexColumnNames specifies columns and their order for keys
      * @param outputColumnNames a list of column names to return
-     * @param keys keys for which records need to be returned
+     * @param keys keys for which records need to be returned; includes only unique and non-null values
      * @param outputConstraint constraint on the returned data
      * @param maxSplitCount maximum number of splits to return
      * @param nextToken token from a previous split batch or {@literal null} if it is the first call

@@ -13,22 +13,22 @@
  */
 package com.facebook.presto.sql.gen;
 
+import com.facebook.presto.bytecode.BytecodeNode;
+import com.facebook.presto.bytecode.FieldDefinition;
+import com.facebook.presto.bytecode.MethodGenerationContext;
+import com.facebook.presto.bytecode.Scope;
+import com.facebook.presto.bytecode.expression.BytecodeExpression;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Primitives;
-import io.airlift.bytecode.BytecodeNode;
-import io.airlift.bytecode.FieldDefinition;
-import io.airlift.bytecode.MethodGenerationContext;
-import io.airlift.bytecode.Scope;
-import io.airlift.bytecode.expression.BytecodeExpression;
 
 import java.util.List;
 import java.util.Optional;
 
+import static com.facebook.presto.bytecode.ParameterizedType.type;
 import static com.facebook.presto.sql.gen.BytecodeUtils.generateInvocation;
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static io.airlift.bytecode.ParameterizedType.type;
 import static java.util.Objects.requireNonNull;
 
 public class InvokeFunctionBytecodeExpression
@@ -65,7 +65,13 @@ public class InvokeFunctionBytecodeExpression
     {
         super(type(Primitives.unwrap(function.getMethodHandle().type().returnType())));
 
-        this.invocation = generateInvocation(scope, name, function, instance, parameters.stream().map(BytecodeNode.class::cast).collect(toImmutableList()), binder);
+        this.invocation = generateInvocation(
+                scope,
+                name,
+                function,
+                instance,
+                parameters.stream().map(BytecodeNode.class::cast).collect(toImmutableList()),
+                binder);
         this.oneLineDescription = name + "(" + Joiner.on(", ").join(parameters) + ")";
     }
 

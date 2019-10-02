@@ -19,13 +19,14 @@ import com.facebook.presto.operator.OuterPositionIterator;
 import com.facebook.presto.operator.PagesIndex;
 import com.facebook.presto.operator.StaticLookupSourceProvider;
 import com.facebook.presto.operator.TaskContext;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.gen.JoinCompiler;
-import com.facebook.presto.sql.planner.Symbol;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.SettableFuture;
 import io.airlift.units.DataSize;
 
 import java.util.List;
@@ -35,22 +36,25 @@ import java.util.Set;
 import java.util.function.Supplier;
 
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.util.concurrent.Futures.transform;
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static java.util.Objects.requireNonNull;
 
 public class IndexLookupSourceFactory
         implements LookupSourceFactory
 {
     private final List<Type> outputTypes;
-    private final Map<Symbol, Integer> layout;
+    private final Map<VariableReferenceExpression, Integer> layout;
     private final Supplier<IndexLoader> indexLoaderSupplier;
     private TaskContext taskContext;
+    private final SettableFuture<?> whenTaskContextSet = SettableFuture.create();
 
     public IndexLookupSourceFactory(
             Set<Integer> lookupSourceInputChannels,
             List<Integer> keyOutputChannels,
             OptionalInt keyOutputHashChannel,
             List<Type> outputTypes,
-            Map<Symbol, Integer> layout,
+            Map<VariableReferenceExpression, Integer> layout,
             IndexBuildDriverFactoryProvider indexBuildDriverFactoryProvider,
             DataSize maxIndexMemorySize,
             IndexJoinLookupStats stats,
@@ -83,7 +87,7 @@ public class IndexLookupSourceFactory
     }
 
     @Override
-    public Map<Symbol, Integer> getLayout()
+    public Map<VariableReferenceExpression, Integer> getLayout()
     {
         return layout;
     }
@@ -92,6 +96,7 @@ public class IndexLookupSourceFactory
     public void setTaskContext(TaskContext taskContext)
     {
         this.taskContext = taskContext;
+        whenTaskContextSet.set(null);
     }
 
     @Override
@@ -102,6 +107,23 @@ public class IndexLookupSourceFactory
         IndexLoader indexLoader = indexLoaderSupplier.get();
         indexLoader.setContext(taskContext);
         return Futures.immediateFuture(new StaticLookupSourceProvider(new IndexLookupSource(indexLoader)));
+    }
+
+    @Override
+    public ListenableFuture<?> whenBuildFinishes()
+    {
+        return Futures.transformAsync(
+                whenTaskContextSet,
+                ignored -> transform(
+                        this.createLookupSourceProvider(),
+                        lookupSourceProvider -> {
+                            // Close the lookupSourceProvider we just created.
+                            // The only reason we created it is to wait until lookup source is ready.
+                            lookupSourceProvider.close();
+                            return null;
+                        },
+                        directExecutor()),
+                directExecutor());
     }
 
     @Override

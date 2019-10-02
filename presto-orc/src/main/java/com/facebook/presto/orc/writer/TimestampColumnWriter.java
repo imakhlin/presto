@@ -69,6 +69,8 @@ public class TimestampColumnWriter
     private final PresentOutputStream presentStream;
 
     private final List<ColumnStatistics> rowGroupColumnStatistics = new ArrayList<>();
+    private long columnStatisticsRetainedSizeInBytes;
+
     private final long baseTimestampInSeconds;
 
     private int nonNullValueCount;
@@ -163,6 +165,7 @@ public class TimestampColumnWriter
         checkState(!closed);
         ColumnStatistics statistics = new ColumnStatistics((long) nonNullValueCount, 0, null, null, null, null, null, null, null, null);
         rowGroupColumnStatistics.add(statistics);
+        columnStatisticsRetainedSizeInBytes += statistics.getRetainedSizeInBytes();
         nonNullValueCount = 0;
         return ImmutableMap.of(column, statistics);
     }
@@ -243,8 +246,7 @@ public class TimestampColumnWriter
     @Override
     public long getRetainedBytes()
     {
-        // NOTE: we do not include stats because they should be small and it would be annoying to calculate the size
-        return INSTANCE_SIZE + secondsStream.getRetainedBytes() + nanosStream.getRetainedBytes() + presentStream.getRetainedBytes();
+        return INSTANCE_SIZE + secondsStream.getRetainedBytes() + nanosStream.getRetainedBytes() + presentStream.getRetainedBytes() + columnStatisticsRetainedSizeInBytes;
     }
 
     @Override
@@ -255,6 +257,7 @@ public class TimestampColumnWriter
         nanosStream.reset();
         presentStream.reset();
         rowGroupColumnStatistics.clear();
+        columnStatisticsRetainedSizeInBytes = 0;
         nonNullValueCount = 0;
     }
 }

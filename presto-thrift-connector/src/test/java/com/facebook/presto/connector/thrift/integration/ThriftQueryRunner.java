@@ -13,6 +13,13 @@
  */
 package com.facebook.presto.connector.thrift.integration;
 
+import com.facebook.drift.codec.ThriftCodecManager;
+import com.facebook.drift.server.DriftServer;
+import com.facebook.drift.server.DriftService;
+import com.facebook.drift.server.stats.NullMethodInvocationStatsFactory;
+import com.facebook.drift.transport.netty.server.DriftNettyServerConfig;
+import com.facebook.drift.transport.netty.server.DriftNettyServerTransport;
+import com.facebook.drift.transport.netty.server.DriftNettyServerTransportFactory;
 import com.facebook.presto.Session;
 import com.facebook.presto.connector.thrift.ThriftPlugin;
 import com.facebook.presto.connector.thrift.server.ThriftIndexedTpchService;
@@ -22,6 +29,9 @@ import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.QualifiedObjectName;
 import com.facebook.presto.server.testing.TestingPrestoServer;
 import com.facebook.presto.spi.Plugin;
+import com.facebook.presto.split.PageSourceManager;
+import com.facebook.presto.split.SplitManager;
+import com.facebook.presto.sql.planner.ConnectorPlanOptimizerManager;
 import com.facebook.presto.sql.planner.NodePartitioningManager;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.QueryRunner;
@@ -31,13 +41,6 @@ import com.facebook.presto.transaction.TransactionManager;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import io.airlift.drift.codec.ThriftCodecManager;
-import io.airlift.drift.server.DriftServer;
-import io.airlift.drift.server.DriftService;
-import io.airlift.drift.server.stats.NullMethodInvocationStatsFactory;
-import io.airlift.drift.transport.netty.server.DriftNettyServerConfig;
-import io.airlift.drift.transport.netty.server.DriftNettyServerTransport;
-import io.airlift.drift.transport.netty.server.DriftNettyServerTransportFactory;
 import io.airlift.log.Logger;
 import io.airlift.log.Logging;
 
@@ -201,9 +204,27 @@ public final class ThriftQueryRunner
         }
 
         @Override
+        public SplitManager getSplitManager()
+        {
+            return source.getSplitManager();
+        }
+
+        @Override
+        public PageSourceManager getPageSourceManager()
+        {
+            return source.getPageSourceManager();
+        }
+
+        @Override
         public NodePartitioningManager getNodePartitioningManager()
         {
             return source.getNodePartitioningManager();
+        }
+
+        @Override
+        public ConnectorPlanOptimizerManager getPlanOptimizerManager()
+        {
+            return source.getPlanOptimizerManager();
         }
 
         @Override

@@ -14,6 +14,7 @@
 package com.facebook.presto.server;
 
 import com.facebook.presto.spi.security.Identity;
+import com.facebook.presto.spi.security.SelectedRole;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.Test;
@@ -23,14 +24,16 @@ import javax.ws.rs.WebApplicationException;
 
 import java.util.Optional;
 
-import static com.facebook.presto.SystemSessionProperties.DISTRIBUTED_JOIN;
 import static com.facebook.presto.SystemSessionProperties.HASH_PARTITION_COUNT;
+import static com.facebook.presto.SystemSessionProperties.JOIN_DISTRIBUTION_TYPE;
 import static com.facebook.presto.SystemSessionProperties.QUERY_MAX_MEMORY;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_CATALOG;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_CLIENT_INFO;
+import static com.facebook.presto.client.PrestoHeaders.PRESTO_EXTRA_CREDENTIAL;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_LANGUAGE;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_PATH;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_PREPARED_STATEMENT;
+import static com.facebook.presto.client.PrestoHeaders.PRESTO_ROLE;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SCHEMA;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SESSION;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SOURCE;
@@ -54,8 +57,13 @@ public class TestHttpRequestSessionContext
                         .put(PRESTO_TIME_ZONE, "Asia/Taipei")
                         .put(PRESTO_CLIENT_INFO, "client-info")
                         .put(PRESTO_SESSION, QUERY_MAX_MEMORY + "=1GB")
-                        .put(PRESTO_SESSION, DISTRIBUTED_JOIN + "=true," + HASH_PARTITION_COUNT + " = 43")
+                        .put(PRESTO_SESSION, JOIN_DISTRIBUTION_TYPE + "=partitioned," + HASH_PARTITION_COUNT + " = 43")
                         .put(PRESTO_PREPARED_STATEMENT, "query1=select * from foo,query2=select * from bar")
+                        .put(PRESTO_ROLE, "foo_connector=ALL")
+                        .put(PRESTO_ROLE, "bar_connector=NONE")
+                        .put(PRESTO_ROLE, "foobar_connector=ROLE{role}")
+                        .put(PRESTO_EXTRA_CREDENTIAL, "test.token.foo=bar")
+                        .put(PRESTO_EXTRA_CREDENTIAL, "test.token.abc=xyz")
                         .build(),
                 "testRemote");
 
@@ -68,8 +76,13 @@ public class TestHttpRequestSessionContext
         assertEquals(context.getClientInfo(), "client-info");
         assertEquals(context.getLanguage(), "zh-TW");
         assertEquals(context.getTimeZoneId(), "Asia/Taipei");
-        assertEquals(context.getSystemProperties(), ImmutableMap.of(QUERY_MAX_MEMORY, "1GB", DISTRIBUTED_JOIN, "true", HASH_PARTITION_COUNT, "43"));
+        assertEquals(context.getSystemProperties(), ImmutableMap.of(QUERY_MAX_MEMORY, "1GB", JOIN_DISTRIBUTION_TYPE, "partitioned", HASH_PARTITION_COUNT, "43"));
         assertEquals(context.getPreparedStatements(), ImmutableMap.of("query1", "select * from foo", "query2", "select * from bar"));
+        assertEquals(context.getIdentity().getRoles(), ImmutableMap.of(
+                "foo_connector", new SelectedRole(SelectedRole.Type.ALL, Optional.empty()),
+                "bar_connector", new SelectedRole(SelectedRole.Type.NONE, Optional.empty()),
+                "foobar_connector", new SelectedRole(SelectedRole.Type.ROLE, Optional.of("role"))));
+        assertEquals(context.getIdentity().getExtraCredentials(), ImmutableMap.of("test.token.foo", "bar", "test.token.abc", "xyz"));
     }
 
     @Test(expectedExceptions = WebApplicationException.class)

@@ -13,22 +13,25 @@
  */
 package com.facebook.presto.operator;
 
-import com.facebook.presto.ScheduledSplit;
 import com.facebook.presto.Session;
-import com.facebook.presto.TaskSource;
-import com.facebook.presto.connector.ConnectorId;
+import com.facebook.presto.execution.ScheduledSplit;
+import com.facebook.presto.execution.TaskSource;
 import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorSplit;
+import com.facebook.presto.spi.ConnectorTableHandle;
 import com.facebook.presto.spi.FixedPageSource;
 import com.facebook.presto.spi.HostAddress;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.TableHandle;
+import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.split.PageSourceProvider;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.PageConsumerOperator;
 import com.facebook.presto.testing.TestingTransactionHandle;
@@ -36,6 +39,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
+import com.google.common.util.concurrent.Uninterruptibles;
 import io.airlift.units.Duration;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
@@ -43,6 +47,7 @@ import org.testng.annotations.Test;
 
 import java.io.Closeable;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -72,6 +77,12 @@ import static org.testng.Assert.fail;
 @Test(singleThreaded = true)
 public class TestDriver
 {
+    private static final TableHandle TESTING_TABLE_HANDLE = new TableHandle(
+            new ConnectorId("test"),
+            new ConnectorTableHandle() {},
+            new ConnectorTransactionHandle() {},
+            Optional.empty());
+
     private ExecutorService executor;
     private ScheduledExecutorService scheduledExecutor;
     private DriverContext driverContext;
@@ -83,7 +94,7 @@ public class TestDriver
         scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("test-scheduledExecutor-%s"));
 
         driverContext = createTaskContext(executor, scheduledExecutor, TEST_SESSION)
-                .addPipelineContext(0, true, true)
+                .addPipelineContext(0, true, true, false)
                 .addDriverContext();
     }
 
@@ -114,6 +125,26 @@ public class TestDriver
 
         assertTrue(sink.isFinished());
         assertTrue(source.isFinished());
+    }
+
+    // The race can be reproduced somewhat reliably when the invocationCount is 10K, but we use 1K iterations to cap the test runtime.
+    @Test(invocationCount = 1_000, timeOut = 10_000)
+    public void testConcurrentClose()
+    {
+        List<Type> types = ImmutableList.of(VARCHAR, BIGINT, BIGINT);
+        OperatorContext operatorContext = driverContext.addOperatorContext(0, new PlanNodeId("test"), "values");
+        ValuesOperator source = new ValuesOperator(operatorContext, rowPagesBuilder(types)
+                .addSequencePage(10, 20, 30, 40)
+                .build());
+
+        Operator sink = createSinkOperator(types);
+        Driver driver = Driver.createDriver(driverContext, source, sink);
+        // let these threads race
+        scheduledExecutor.submit(() -> driver.processFor(new Duration(1, TimeUnit.NANOSECONDS))); // don't want to call isFinishedInternal in processFor
+        scheduledExecutor.submit(() -> driver.close());
+        while (!driverContext.isDone()) {
+            Uninterruptibles.sleepUninterruptibly(1, TimeUnit.MILLISECONDS);
+        }
     }
 
     @Test
@@ -151,13 +182,14 @@ public class TestDriver
                 new PageSourceProvider()
                 {
                     @Override
-                    public ConnectorPageSource createPageSource(Session session, Split split, List<ColumnHandle> columns)
+                    public ConnectorPageSource createPageSource(Session session, Split split, TableHandle table, List<ColumnHandle> columns)
                     {
                         return new FixedPageSource(rowPagesBuilder(types)
                                 .addSequencePage(10, 20, 30, 40)
                                 .build());
                     }
                 },
+                TESTING_TABLE_HANDLE,
                 ImmutableList.of());
 
         PageConsumerOperator sink = createSinkOperator(types);
@@ -249,13 +281,14 @@ public class TestDriver
                 new PageSourceProvider()
                 {
                     @Override
-                    public ConnectorPageSource createPageSource(Session session, Split split, List<ColumnHandle> columns)
+                    public ConnectorPageSource createPageSource(Session session, Split split, TableHandle table, List<ColumnHandle> columns)
                     {
                         return new FixedPageSource(rowPagesBuilder(types)
                                 .addSequencePage(10, 20, 30, 40)
                                 .build());
                     }
                 },
+                TESTING_TABLE_HANDLE,
                 ImmutableList.of());
 
         Driver driver = Driver.createDriver(driverContext, source, createSinkOperator(types));
@@ -277,13 +310,14 @@ public class TestDriver
                 new PageSourceProvider()
                 {
                     @Override
-                    public ConnectorPageSource createPageSource(Session session, Split split, List<ColumnHandle> columns)
+                    public ConnectorPageSource createPageSource(Session session, Split split, TableHandle table, List<ColumnHandle> columns)
                     {
                         return new FixedPageSource(rowPagesBuilder(types)
                                 .addSequencePage(10, 20, 30, 40)
                                 .build());
                     }
                 },
+                TESTING_TABLE_HANDLE,
                 ImmutableList.of());
 
         BrokenOperator brokenOperator = new BrokenOperator(driverContext.addOperatorContext(0, new PlanNodeId("test"), "source"));
@@ -461,9 +495,10 @@ public class TestDriver
                 OperatorContext operatorContext,
                 PlanNodeId planNodeId,
                 PageSourceProvider pageSourceProvider,
+                TableHandle table,
                 Iterable<ColumnHandle> columns)
         {
-            super(operatorContext, planNodeId, pageSourceProvider, columns);
+            super(operatorContext, planNodeId, pageSourceProvider, table, columns);
         }
 
         @Override
@@ -485,9 +520,10 @@ public class TestDriver
                 OperatorContext operatorContext,
                 PlanNodeId planNodeId,
                 PageSourceProvider pageSourceProvider,
+                TableHandle table,
                 Iterable<ColumnHandle> columns)
         {
-            super(operatorContext, planNodeId, pageSourceProvider, columns);
+            super(operatorContext, planNodeId, pageSourceProvider, table, columns);
         }
 
         @Override

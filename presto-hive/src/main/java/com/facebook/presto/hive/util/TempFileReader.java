@@ -13,10 +13,10 @@
  */
 package com.facebook.presto.hive.util;
 
+import com.facebook.presto.orc.OrcBatchRecordReader;
 import com.facebook.presto.orc.OrcDataSource;
 import com.facebook.presto.orc.OrcPredicate;
 import com.facebook.presto.orc.OrcReader;
-import com.facebook.presto.orc.OrcRecordReader;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
@@ -34,6 +34,7 @@ import java.util.Map;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_WRITER_DATA_ERROR;
 import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.orc.OrcEncoding.ORC;
+import static com.facebook.presto.orc.OrcReader.INITIAL_BATCH_SIZE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static java.util.Objects.requireNonNull;
 import static org.joda.time.DateTimeZone.UTC;
@@ -42,7 +43,7 @@ public class TempFileReader
         extends AbstractIterator<Page>
 {
     private final List<Type> types;
-    private final OrcRecordReader reader;
+    private final OrcBatchRecordReader reader;
 
     public TempFileReader(List<Type> types, OrcDataSource dataSource)
     {
@@ -54,7 +55,6 @@ public class TempFileReader
                     ORC,
                     new DataSize(1, MEGABYTE),
                     new DataSize(8, MEGABYTE),
-                    new DataSize(8, MEGABYTE),
                     new DataSize(16, MEGABYTE));
 
             Map<Integer, Type> includedColumns = new HashMap<>();
@@ -62,11 +62,12 @@ public class TempFileReader
                 includedColumns.put(i, types.get(i));
             }
 
-            reader = orcReader.createRecordReader(
+            reader = orcReader.createBatchRecordReader(
                     includedColumns,
                     OrcPredicate.TRUE,
                     UTC,
-                    newSimpleAggregatedMemoryContext());
+                    newSimpleAggregatedMemoryContext(),
+                    INITIAL_BATCH_SIZE);
         }
         catch (IOException e) {
             throw new PrestoException(HIVE_WRITER_DATA_ERROR, "Failed to read temporary data");

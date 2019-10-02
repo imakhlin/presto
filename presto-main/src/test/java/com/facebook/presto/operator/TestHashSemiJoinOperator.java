@@ -18,10 +18,10 @@ import com.facebook.presto.RowPagesBuilder;
 import com.facebook.presto.operator.HashSemiJoinOperator.HashSemiJoinOperatorFactory;
 import com.facebook.presto.operator.SetBuilderOperator.SetBuilderOperatorFactory;
 import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.gen.JoinCompiler;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.MaterializedResult;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
@@ -92,7 +92,7 @@ public class TestHashSemiJoinOperator
     @Test(dataProvider = "hashEnabledValues")
     public void testSemiJoin(boolean hashEnabled)
     {
-        DriverContext driverContext = taskContext.addPipelineContext(0, true, true).addDriverContext();
+        DriverContext driverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
 
         // build
         OperatorContext operatorContext = driverContext.addOperatorContext(0, new PlanNodeId("test"), ValuesOperator.class.getSimpleName());
@@ -183,7 +183,7 @@ public class TestHashSemiJoinOperator
     @Test(dataProvider = "hashEnabledValues")
     public void testBuildSideNulls(boolean hashEnabled)
     {
-        DriverContext driverContext = taskContext.addPipelineContext(0, true, true).addDriverContext();
+        DriverContext driverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
 
         // build
         OperatorContext operatorContext = driverContext.addOperatorContext(0, new PlanNodeId("test"), ValuesOperator.class.getSimpleName());
@@ -239,7 +239,7 @@ public class TestHashSemiJoinOperator
     @Test(dataProvider = "hashEnabledValues")
     public void testProbeSideNulls(boolean hashEnabled)
     {
-        DriverContext driverContext = taskContext.addPipelineContext(0, true, true).addDriverContext();
+        DriverContext driverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
 
         // build
         OperatorContext operatorContext = driverContext.addOperatorContext(0, new PlanNodeId("test"), ValuesOperator.class.getSimpleName());
@@ -295,7 +295,7 @@ public class TestHashSemiJoinOperator
     @Test(dataProvider = "hashEnabledValues")
     public void testProbeAndBuildNulls(boolean hashEnabled)
     {
-        DriverContext driverContext = taskContext.addPipelineContext(0, true, true).addDriverContext();
+        DriverContext driverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
 
         // build
         OperatorContext operatorContext = driverContext.addOperatorContext(0, new PlanNodeId("test"), ValuesOperator.class.getSimpleName());
@@ -349,11 +349,11 @@ public class TestHashSemiJoinOperator
         OperatorAssertion.assertOperatorEquals(joinOperatorFactory, driverContext, probeInput, expected, hashEnabled, ImmutableList.of(probeTypes.size()));
     }
 
-    @Test(dataProvider = "hashEnabledValues", expectedExceptions = ExceededMemoryLimitException.class, expectedExceptionsMessageRegExp = "Query exceeded local user memory limit of.*")
+    @Test(dataProvider = "hashEnabledValues", expectedExceptions = ExceededMemoryLimitException.class, expectedExceptionsMessageRegExp = "Query exceeded per-node user memory limit of.*")
     public void testMemoryLimit(boolean hashEnabled)
     {
         DriverContext driverContext = createTaskContext(executor, scheduledExecutor, TEST_SESSION, new DataSize(100, BYTE))
-                .addPipelineContext(0, true, true)
+                .addPipelineContext(0, true, true, false)
                 .addDriverContext();
 
         OperatorContext operatorContext = driverContext.addOperatorContext(0, new PlanNodeId("test"), ValuesOperator.class.getSimpleName());

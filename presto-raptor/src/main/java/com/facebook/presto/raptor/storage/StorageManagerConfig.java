@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.raptor.storage;
 
+import com.facebook.presto.orc.metadata.CompressionKind;
 import com.facebook.presto.spi.type.TimeZoneKey;
 import io.airlift.configuration.Config;
 import io.airlift.configuration.ConfigDescription;
@@ -33,6 +34,8 @@ import java.io.File;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 
+import static com.facebook.presto.orc.metadata.CompressionKind.ZSTD;
+import static com.facebook.presto.raptor.storage.StorageManagerConfig.OrcOptimizedWriterStage.ENABLED;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static java.lang.Math.max;
@@ -53,10 +56,13 @@ public class StorageManagerConfig
     private DataSize orcStreamBufferSize = new DataSize(8, MEGABYTE);
     private DataSize orcTinyStripeThreshold = new DataSize(8, MEGABYTE);
     private boolean orcLazyReadSmallRanges = true;
+    private OrcOptimizedWriterStage orcOptimizedWriterStage = ENABLED;
+    private CompressionKind orcCompressionKind = ZSTD;
     private int deletionThreads = max(1, getRuntime().availableProcessors() / 2);
     private int recoveryThreads = 10;
     private int organizationThreads = 5;
     private boolean organizationEnabled = true;
+    private Duration organizationDiscoveryInterval = new Duration(6, TimeUnit.HOURS);
     private Duration organizationInterval = new Duration(7, TimeUnit.DAYS);
 
     private long maxShardRows = 1_000_000;
@@ -160,6 +166,35 @@ public class StorageManagerConfig
         return this;
     }
 
+    public enum OrcOptimizedWriterStage
+    {
+        ENABLED, ENABLED_AND_VALIDATED
+    }
+
+    public OrcOptimizedWriterStage getOrcOptimizedWriterStage()
+    {
+        return orcOptimizedWriterStage;
+    }
+
+    @Config("storage.orc.optimized-writer-stage")
+    public StorageManagerConfig setOrcOptimizedWriterStage(OrcOptimizedWriterStage orcOptimizedWriterStage)
+    {
+        this.orcOptimizedWriterStage = orcOptimizedWriterStage;
+        return this;
+    }
+
+    public CompressionKind getOrcCompressionKind()
+    {
+        return orcCompressionKind;
+    }
+
+    @Config("storage.orc.compression-kind")
+    public StorageManagerConfig setOrcCompressionKind(CompressionKind orcCompressionKind)
+    {
+        this.orcCompressionKind = orcCompressionKind;
+        return this;
+    }
+
     @Min(1)
     public int getDeletionThreads()
     {
@@ -228,6 +263,21 @@ public class StorageManagerConfig
     public StorageManagerConfig setOrganizationInterval(Duration organizationInterval)
     {
         this.organizationInterval = organizationInterval;
+        return this;
+    }
+
+    @NotNull
+    @MinDuration("1s")
+    public Duration getOrganizationDiscoveryInterval()
+    {
+        return organizationDiscoveryInterval;
+    }
+
+    @Config("storage.organization-discovery-interval")
+    @ConfigDescription("How long to wait between discovering tables that need to be organized")
+    public StorageManagerConfig setOrganizationDiscoveryInterval(Duration organizationDiscoveryInterval)
+    {
+        this.organizationDiscoveryInterval = organizationDiscoveryInterval;
         return this;
     }
 

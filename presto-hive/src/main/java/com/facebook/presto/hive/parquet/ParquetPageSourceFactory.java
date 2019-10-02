@@ -15,64 +15,98 @@ package com.facebook.presto.hive.parquet;
 
 import com.facebook.presto.hive.FileFormatDataSourceStats;
 import com.facebook.presto.hive.HdfsEnvironment;
+import com.facebook.presto.hive.HiveBatchPageSourceFactory;
 import com.facebook.presto.hive.HiveColumnHandle;
-import com.facebook.presto.hive.HivePageSourceFactory;
-import com.facebook.presto.hive.parquet.predicate.ParquetPredicate;
-import com.facebook.presto.hive.parquet.reader.ParquetMetadataReader;
-import com.facebook.presto.hive.parquet.reader.ParquetReader;
+import com.facebook.presto.hive.HiveType;
 import com.facebook.presto.memory.context.AggregatedMemoryContext;
+import com.facebook.presto.parquet.ParquetCorruptionException;
+import com.facebook.presto.parquet.ParquetDataSource;
+import com.facebook.presto.parquet.RichColumnDescriptor;
+import com.facebook.presto.parquet.predicate.Predicate;
+import com.facebook.presto.parquet.reader.MetadataReader;
+import com.facebook.presto.parquet.reader.ParquetReader;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.predicate.Domain;
 import com.facebook.presto.spi.predicate.TupleDomain;
+import com.facebook.presto.spi.type.StandardTypes;
+import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.parquet.column.ColumnDescriptor;
+import org.apache.parquet.hadoop.metadata.BlockMetaData;
+import org.apache.parquet.hadoop.metadata.FileMetaData;
+import org.apache.parquet.hadoop.metadata.ParquetMetadata;
+import org.apache.parquet.io.MessageColumnIO;
+import org.apache.parquet.schema.GroupType;
+import org.apache.parquet.schema.MessageType;
+import org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName;
 import org.joda.time.DateTimeZone;
-import parquet.column.ColumnDescriptor;
-import parquet.hadoop.metadata.BlockMetaData;
-import parquet.hadoop.metadata.FileMetaData;
-import parquet.hadoop.metadata.ParquetMetadata;
-import parquet.io.MessageColumnIO;
-import parquet.schema.MessageType;
 
 import javax.inject.Inject;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
+import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 
 import static com.facebook.presto.hive.HiveColumnHandle.ColumnType.REGULAR;
+import static com.facebook.presto.hive.HiveErrorCode.HIVE_BAD_DATA;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_CANNOT_OPEN_SPLIT;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_MISSING_DATA;
-import static com.facebook.presto.hive.HiveSessionProperties.isParquetOptimizedReaderEnabled;
-import static com.facebook.presto.hive.HiveSessionProperties.isParquetPredicatePushdownEnabled;
+import static com.facebook.presto.hive.HiveErrorCode.HIVE_PARTITION_SCHEMA_MISMATCH;
+import static com.facebook.presto.hive.HiveSessionProperties.isFailOnCorruptedParquetStatistics;
 import static com.facebook.presto.hive.HiveSessionProperties.isUseParquetColumnNames;
 import static com.facebook.presto.hive.HiveUtil.getDeserializerClassName;
 import static com.facebook.presto.hive.parquet.HdfsParquetDataSource.buildHdfsParquetDataSource;
-import static com.facebook.presto.hive.parquet.ParquetTypeUtils.getColumnIO;
-import static com.facebook.presto.hive.parquet.ParquetTypeUtils.getDescriptors;
-import static com.facebook.presto.hive.parquet.ParquetTypeUtils.getParquetType;
-import static com.facebook.presto.hive.parquet.predicate.ParquetPredicateUtils.buildParquetPredicate;
-import static com.facebook.presto.hive.parquet.predicate.ParquetPredicateUtils.getParquetTupleDomain;
-import static com.facebook.presto.hive.parquet.predicate.ParquetPredicateUtils.predicateMatches;
 import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
+import static com.facebook.presto.parquet.ParquetTypeUtils.getColumnIO;
+import static com.facebook.presto.parquet.ParquetTypeUtils.getDescriptors;
+import static com.facebook.presto.parquet.ParquetTypeUtils.getParquetTypeByName;
+import static com.facebook.presto.parquet.predicate.PredicateUtils.buildPredicate;
+import static com.facebook.presto.parquet.predicate.PredicateUtils.predicateMatches;
+import static com.facebook.presto.spi.type.StandardTypes.ARRAY;
+import static com.facebook.presto.spi.type.StandardTypes.BIGINT;
+import static com.facebook.presto.spi.type.StandardTypes.CHAR;
+import static com.facebook.presto.spi.type.StandardTypes.DATE;
+import static com.facebook.presto.spi.type.StandardTypes.DECIMAL;
+import static com.facebook.presto.spi.type.StandardTypes.INTEGER;
+import static com.facebook.presto.spi.type.StandardTypes.MAP;
+import static com.facebook.presto.spi.type.StandardTypes.REAL;
+import static com.facebook.presto.spi.type.StandardTypes.ROW;
+import static com.facebook.presto.spi.type.StandardTypes.SMALLINT;
+import static com.facebook.presto.spi.type.StandardTypes.TIMESTAMP;
+import static com.facebook.presto.spi.type.StandardTypes.TINYINT;
+import static com.facebook.presto.spi.type.StandardTypes.VARBINARY;
+import static com.facebook.presto.spi.type.StandardTypes.VARCHAR;
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Strings.nullToEmpty;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
+import static org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector.Category.PRIMITIVE;
+import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
+import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BOOLEAN;
+import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.DOUBLE;
+import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.FIXED_LEN_BYTE_ARRAY;
+import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.FLOAT;
+import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT32;
+import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT64;
+import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.INT96;
 
 public class ParquetPageSourceFactory
-        implements HivePageSourceFactory
+        implements HiveBatchPageSourceFactory
 {
     private static final Set<String> PARQUET_SERDE_CLASS_NAMES = ImmutableSet.<String>builder()
             .add("org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe")
@@ -104,10 +138,6 @@ public class ParquetPageSourceFactory
             TupleDomain<HiveColumnHandle> effectivePredicate,
             DateTimeZone hiveStorageTimeZone)
     {
-        if (!isParquetOptimizedReaderEnabled(session)) {
-            return Optional.empty();
-        }
-
         if (!PARQUET_SERDE_CLASS_NAMES.contains(getDeserializerClassName(schema))) {
             return Optional.empty();
         }
@@ -123,8 +153,8 @@ public class ParquetPageSourceFactory
                 schema,
                 columns,
                 isUseParquetColumnNames(session),
+                isFailOnCorruptedParquetStatistics(session),
                 typeManager,
-                isParquetPredicatePushdownEnabled(session),
                 effectivePredicate,
                 stats));
     }
@@ -140,8 +170,8 @@ public class ParquetPageSourceFactory
             Properties schema,
             List<HiveColumnHandle> columns,
             boolean useParquetColumnNames,
+            boolean failOnCorruptedParquetStatistics,
             TypeManager typeManager,
-            boolean predicatePushdownEnabled,
             TupleDomain<HiveColumnHandle> effectivePredicate,
             FileFormatDataSourceStats stats)
     {
@@ -151,40 +181,42 @@ public class ParquetPageSourceFactory
         try {
             FileSystem fileSystem = hdfsEnvironment.getFileSystem(user, path, configuration);
             FSDataInputStream inputStream = fileSystem.open(path);
-            ParquetMetadata parquetMetadata = ParquetMetadataReader.readFooter(inputStream, path, fileSize);
+            ParquetMetadata parquetMetadata = MetadataReader.readFooter(inputStream, path, fileSize);
             FileMetaData fileMetaData = parquetMetadata.getFileMetaData();
             MessageType fileSchema = fileMetaData.getSchema();
             dataSource = buildHdfsParquetDataSource(inputStream, path, fileSize, stats);
 
-            List<parquet.schema.Type> fields = columns.stream()
+            List<org.apache.parquet.schema.Type> fields = columns.stream()
                     .filter(column -> column.getColumnType() == REGULAR)
-                    .map(column -> getParquetType(column, fileSchema, useParquetColumnNames))
-                    .filter(Objects::nonNull)
+                    .map(column -> getParquetType(typeManager.getType(column.getTypeSignature()), fileSchema, useParquetColumnNames, column.getName(), column.getHiveColumnIndex(), column.getHiveType()))
+                    .filter(Optional::isPresent)
+                    .map(Optional::get)
                     .collect(toList());
 
             MessageType requestedSchema = new MessageType(fileSchema.getName(), fields);
 
-            List<BlockMetaData> blocks = new ArrayList<>();
+            ImmutableList.Builder<BlockMetaData> footerBlocks = ImmutableList.builder();
             for (BlockMetaData block : parquetMetadata.getBlocks()) {
                 long firstDataPage = block.getColumns().get(0).getFirstDataPageOffset();
                 if (firstDataPage >= start && firstDataPage < start + length) {
-                    blocks.add(block);
+                    footerBlocks.add(block);
                 }
             }
 
-            if (predicatePushdownEnabled) {
-                Map<List<String>, RichColumnDescriptor> descriptorsByPath = getDescriptors(fileSchema, requestedSchema);
-                TupleDomain<ColumnDescriptor> parquetTupleDomain = getParquetTupleDomain(descriptorsByPath, effectivePredicate);
-                ParquetPredicate parquetPredicate = buildParquetPredicate(requestedSchema, parquetTupleDomain, descriptorsByPath);
-                final ParquetDataSource finalDataSource = dataSource;
-                blocks = blocks.stream()
-                        .filter(block -> predicateMatches(parquetPredicate, block, finalDataSource, descriptorsByPath, parquetTupleDomain))
-                        .collect(toList());
+            Map<List<String>, RichColumnDescriptor> descriptorsByPath = getDescriptors(fileSchema, requestedSchema);
+            TupleDomain<ColumnDescriptor> parquetTupleDomain = getParquetTupleDomain(descriptorsByPath, effectivePredicate);
+            Predicate parquetPredicate = buildPredicate(requestedSchema, parquetTupleDomain, descriptorsByPath);
+            final ParquetDataSource finalDataSource = dataSource;
+            ImmutableList.Builder<BlockMetaData> blocks = ImmutableList.builder();
+            for (BlockMetaData block : footerBlocks.build()) {
+                if (predicateMatches(parquetPredicate, block, finalDataSource, descriptorsByPath, parquetTupleDomain, failOnCorruptedParquetStatistics)) {
+                    blocks.add(block);
+                }
             }
             MessageColumnIO messageColumnIO = getColumnIO(fileSchema, requestedSchema);
             ParquetReader parquetReader = new ParquetReader(
                     messageColumnIO,
-                    blocks,
+                    blocks.build(),
                     dataSource,
                     systemMemoryContext);
 
@@ -209,6 +241,9 @@ public class ParquetPageSourceFactory
             if (e instanceof PrestoException) {
                 throw (PrestoException) e;
             }
+            if (e instanceof ParquetCorruptionException) {
+                throw new PrestoException(HIVE_BAD_DATA, e);
+            }
             if (nullToEmpty(e.getMessage()).trim().equals("Filesystem closed") ||
                     e instanceof FileNotFoundException) {
                 throw new PrestoException(HIVE_CANNOT_OPEN_SPLIT, e);
@@ -218,6 +253,141 @@ public class ParquetPageSourceFactory
                 throw new PrestoException(HIVE_MISSING_DATA, message, e);
             }
             throw new PrestoException(HIVE_CANNOT_OPEN_SPLIT, message, e);
+        }
+    }
+
+    public static TupleDomain<ColumnDescriptor> getParquetTupleDomain(Map<List<String>, RichColumnDescriptor> descriptorsByPath, TupleDomain<HiveColumnHandle> effectivePredicate)
+    {
+        if (effectivePredicate.isNone()) {
+            return TupleDomain.none();
+        }
+
+        ImmutableMap.Builder<ColumnDescriptor, Domain> predicate = ImmutableMap.builder();
+        for (Entry<HiveColumnHandle, Domain> entry : effectivePredicate.getDomains().get().entrySet()) {
+            HiveColumnHandle columnHandle = entry.getKey();
+            // skip looking up predicates for complex types as Parquet only stores stats for primitives
+            if (!columnHandle.getHiveType().getCategory().equals(PRIMITIVE)) {
+                continue;
+            }
+
+            RichColumnDescriptor descriptor = descriptorsByPath.get(ImmutableList.of(columnHandle.getName()));
+            if (descriptor != null) {
+                predicate.put(descriptor, entry.getValue());
+            }
+        }
+        return TupleDomain.withColumnDomains(predicate.build());
+    }
+
+    public static Optional<org.apache.parquet.schema.Type> getParquetType(Type prestoType, MessageType messageType, boolean useParquetColumnNames, String columnName, int columnHiveIndex, HiveType hiveType)
+    {
+        org.apache.parquet.schema.Type type = null;
+        if (useParquetColumnNames) {
+            type = getParquetTypeByName(columnName, messageType);
+        }
+        else if (columnHiveIndex < messageType.getFieldCount()) {
+            type = messageType.getType(columnHiveIndex);
+        }
+
+        if (type == null) {
+            return Optional.empty();
+        }
+
+        if (!checkSchemaMatch(type, prestoType)) {
+            String parquetTypeName;
+            if (type.isPrimitive()) {
+                parquetTypeName = type.asPrimitiveType().getPrimitiveTypeName().toString();
+            }
+            else {
+                GroupType group = type.asGroupType();
+                StringBuilder builder = new StringBuilder();
+                group.writeToStringBuilder(builder, "");
+                parquetTypeName = builder.toString();
+            }
+            throw new PrestoException(HIVE_PARTITION_SCHEMA_MISMATCH, format("The column %s is declared as type %s, but the Parquet file declares the column as type %s",
+                                            columnName,
+                                            hiveType,
+                                            parquetTypeName));
+        }
+        return Optional.of(type);
+    }
+
+    private static boolean checkSchemaMatch(org.apache.parquet.schema.Type parquetType, Type type)
+    {
+        String prestoType = type.getTypeSignature().getBase();
+        if (parquetType instanceof GroupType) {
+            GroupType groupType = parquetType.asGroupType();
+            switch (prestoType) {
+                case ROW:
+                    if (groupType.getFields().size() == type.getTypeParameters().size()) {
+                        for (int i = 0; i < groupType.getFields().size(); i++) {
+                            if (!checkSchemaMatch(groupType.getFields().get(i), type.getTypeParameters().get(i))) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                    return false;
+                case MAP:
+                    if (groupType.getFields().size() != 1) {
+                        return false;
+                    }
+                    org.apache.parquet.schema.Type mapKeyType = groupType.getFields().get(0);
+                    if (mapKeyType instanceof GroupType) {
+                        GroupType mapGroupType = mapKeyType.asGroupType();
+                        return mapGroupType.getFields().size() == 2 &&
+                            checkSchemaMatch(mapGroupType.getFields().get(0), type.getTypeParameters().get(0)) &&
+                            checkSchemaMatch(mapGroupType.getFields().get(1), type.getTypeParameters().get(1));
+                    }
+                    return false;
+                case ARRAY:
+                    /* array has a standard 3-level structure with middle level repeated group with a single field:
+                    *  optional group my_list (LIST) {
+                    *     repeated group element {
+                    *        required type field;
+                    *     };
+                    *  }
+                    *  Backward-compatibility support for 2-level arrays:
+                    *   optional group my_list (LIST) {
+                    *      repeated type field;
+                    *   }
+                    *  field itself could be primitive or group
+                    */
+                    if (groupType.getFields().size() != 1) {
+                        return false;
+                    }
+                    org.apache.parquet.schema.Type bagType = groupType.getFields().get(0);
+                    if (bagType.isPrimitive()) {
+                        return checkSchemaMatch(bagType.asPrimitiveType(), type.getTypeParameters().get(0));
+                    }
+                    GroupType bagGroupType = bagType.asGroupType();
+                    return checkSchemaMatch(bagGroupType, type.getTypeParameters().get(0)) ||
+                        (bagGroupType.getFields().size() == 1 && checkSchemaMatch(bagGroupType.getFields().get(0), type.getTypeParameters().get(0)));
+                default:
+                    return false;
+            }
+        }
+
+        checkArgument(parquetType.isPrimitive(), "Unexpected parquet type for column: %s " + parquetType.getName());
+        PrimitiveTypeName parquetTypeName = parquetType.asPrimitiveType().getPrimitiveTypeName();
+        switch (parquetTypeName) {
+            case INT64:
+                return prestoType.equals(BIGINT) || prestoType.equals(DECIMAL);
+            case INT32:
+                return prestoType.equals(INTEGER) || prestoType.equals(SMALLINT) || prestoType.equals(DATE) || prestoType.equals(DECIMAL) || prestoType.equals(TINYINT);
+            case BOOLEAN:
+                return prestoType.equals(StandardTypes.BOOLEAN);
+            case FLOAT:
+                return prestoType.equals(REAL);
+            case DOUBLE:
+                return prestoType.equals(StandardTypes.DOUBLE);
+            case BINARY:
+                return prestoType.equals(VARBINARY) || prestoType.equals(VARCHAR) || prestoType.startsWith(CHAR) || prestoType.equals(DECIMAL);
+            case INT96:
+                return prestoType.equals(TIMESTAMP);
+            case FIXED_LEN_BYTE_ARRAY:
+                return prestoType.equals(DECIMAL);
+            default:
+                throw new IllegalArgumentException("Unexpected parquet type name: " + parquetTypeName);
         }
     }
 }

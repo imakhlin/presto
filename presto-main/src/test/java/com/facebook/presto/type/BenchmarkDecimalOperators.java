@@ -14,11 +14,13 @@
 package com.facebook.presto.type;
 
 import com.facebook.presto.RowPagesBuilder;
-import com.facebook.presto.Session;
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.operator.DriverYieldSignal;
 import com.facebook.presto.operator.project.PageProcessor;
 import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.relation.RowExpression;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.spi.type.BigintType;
 import com.facebook.presto.spi.type.DecimalType;
 import com.facebook.presto.spi.type.DoubleType;
@@ -27,10 +29,7 @@ import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.gen.ExpressionCompiler;
 import com.facebook.presto.sql.gen.PageFunctionCompiler;
 import com.facebook.presto.sql.parser.SqlParser;
-import com.facebook.presto.sql.planner.Symbol;
-import com.facebook.presto.sql.planner.SymbolToInputRewriter;
 import com.facebook.presto.sql.planner.TypeProvider;
-import com.facebook.presto.sql.relational.RowExpression;
 import com.facebook.presto.sql.relational.SqlToRowExpressionTranslator;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.NodeRef;
@@ -62,21 +61,19 @@ import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.RowPagesBuilder.rowPagesBuilder;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
-import static com.facebook.presto.metadata.FunctionKind.SCALAR;
+import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.metadata.MetadataManager.createTestMetadataManager;
 import static com.facebook.presto.operator.scalar.FunctionAssertions.createExpression;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypesFromInput;
+import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
 import static com.facebook.presto.testing.TestingConnectorSession.SESSION;
-import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static java.math.BigInteger.ONE;
 import static java.math.BigInteger.ZERO;
 import static java.util.Collections.emptyList;
 import static java.util.stream.Collectors.toList;
-import static java.util.stream.Collectors.toMap;
 import static org.openjdk.jmh.annotations.Scope.Thread;
 
 @State(Scope.Thread)
@@ -535,18 +532,21 @@ public class BenchmarkDecimalOperators
 
     private Object execute(BaseState state)
     {
-        return ImmutableList.copyOf(state.getProcessor().process(SESSION, new DriverYieldSignal(), state.getInputPage()));
+        return ImmutableList.copyOf(
+                state.getProcessor().process(
+                        SESSION,
+                        new DriverYieldSignal(),
+                        newSimpleAggregatedMemoryContext().newLocalMemoryContext(PageProcessor.class.getSimpleName()),
+                        state.getInputPage()));
     }
 
     private static class BaseState
     {
         private final MetadataManager metadata = createTestMetadataManager();
-        private final Session session = testSessionBuilder().build();
         private final Random random = new Random();
 
-        protected final Map<String, Symbol> symbols = new HashMap<>();
-        protected final Map<Symbol, Type> symbolTypes = new HashMap<>();
-        private final Map<Symbol, Integer> sourceLayout = new HashMap<>();
+        protected final Map<String, Type> symbolTypes = new HashMap<>();
+        private final Map<VariableReferenceExpression, Integer> sourceLayout = new HashMap<>();
         protected final List<Type> types = new LinkedList<>();
 
         protected Page inputPage;
@@ -565,10 +565,8 @@ public class BenchmarkDecimalOperators
 
         protected void addSymbol(String name, Type type)
         {
-            Symbol symbol = new Symbol(name);
-            symbols.put(name, symbol);
-            symbolTypes.put(symbol, type);
-            sourceLayout.put(symbol, types.size());
+            symbolTypes.put(name, type);
+            sourceLayout.put(new VariableReferenceExpression(name, type), types.size());
             types.add(type);
         }
 
@@ -604,15 +602,12 @@ public class BenchmarkDecimalOperators
             this.doubleMaxValue = doubleMaxValue;
         }
 
-        private RowExpression rowExpression(String expression)
+        private RowExpression rowExpression(String value)
         {
-            Expression inputReferenceExpression = new SymbolToInputRewriter(sourceLayout).rewrite(createExpression(expression, metadata, TypeProvider.copyOf(symbolTypes)));
+            Expression expression = createExpression(value, metadata, TypeProvider.copyOf(symbolTypes));
 
-            Map<Integer, Type> types = sourceLayout.entrySet().stream()
-                    .collect(toMap(Map.Entry::getValue, entry -> symbolTypes.get(entry.getKey())));
-
-            Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypesFromInput(TEST_SESSION, metadata, SQL_PARSER, types, inputReferenceExpression, emptyList());
-            return SqlToRowExpressionTranslator.translate(inputReferenceExpression, SCALAR, expressionTypes, metadata.getFunctionRegistry(), metadata.getTypeManager(), TEST_SESSION, true);
+            Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypes(TEST_SESSION, metadata, SQL_PARSER, TypeProvider.copyOf(symbolTypes), expression, emptyList(), WarningCollector.NOOP);
+            return SqlToRowExpressionTranslator.translate(expression, expressionTypes, sourceLayout, metadata.getFunctionManager(), metadata.getTypeManager(), TEST_SESSION, true);
         }
 
         private Object generateRandomValue(Type type)

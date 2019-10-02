@@ -16,14 +16,14 @@ package com.facebook.presto.execution.scheduler;
 import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.execution.RemoteTask;
 import com.facebook.presto.execution.SqlStageExecution;
-import com.facebook.presto.execution.scheduler.FixedSourcePartitionedScheduler.FixedSplitPlacementPolicy;
+import com.facebook.presto.execution.scheduler.FixedSourcePartitionedScheduler.BucketedSplitPlacementPolicy;
+import com.facebook.presto.metadata.InternalNode;
 import com.facebook.presto.metadata.Split;
-import com.facebook.presto.spi.Node;
 import com.facebook.presto.spi.connector.ConnectorPartitionHandle;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.split.EmptySplit;
 import com.facebook.presto.split.SplitSource;
 import com.facebook.presto.split.SplitSource.SplitBatch;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
@@ -45,9 +45,7 @@ import static com.facebook.presto.execution.scheduler.ScheduleResult.BlockedReas
 import static com.facebook.presto.execution.scheduler.ScheduleResult.BlockedReason.NO_ACTIVE_DRIVER_GROUP;
 import static com.facebook.presto.execution.scheduler.ScheduleResult.BlockedReason.SPLIT_QUEUES_FULL;
 import static com.facebook.presto.execution.scheduler.ScheduleResult.BlockedReason.WAITING_FOR_SOURCE;
-import static com.facebook.presto.spi.StandardErrorCode.NO_NODES_AVAILABLE;
 import static com.facebook.presto.spi.connector.NotPartitionedPartitionHandle.NOT_PARTITIONED;
-import static com.facebook.presto.util.Failures.checkCondition;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
@@ -59,7 +57,7 @@ import static io.airlift.concurrent.MoreFutures.whenAnyComplete;
 import static java.util.Objects.requireNonNull;
 
 public class SourcePartitionedScheduler
-        implements StageScheduler
+        implements SourceScheduler
 {
     private enum State
     {
@@ -81,7 +79,7 @@ public class SourcePartitionedScheduler
 
         /**
          * All splits have been provided to caller of this scheduler.
-         * Cleanup operations are done (e.g., drainCompletedLifespans has drained all driver groups).
+         * Cleanup operations are done (e.g., drainCompletelyScheduledLifespans has drained all driver groups).
          */
         FINISHED
     }
@@ -91,7 +89,10 @@ public class SourcePartitionedScheduler
     private final SplitPlacementPolicy splitPlacementPolicy;
     private final int splitBatchSize;
     private final PlanNodeId partitionedNode;
-    private final boolean autoDropCompletedLifespans;
+    private final boolean groupedExecution;
+
+    // TODO: Add LIFESPAN_ADDED into SourcePartitionedScheduler#State and remove this boolean
+    private boolean lifespanAdded;
 
     private final Map<Lifespan, ScheduleGroup> scheduleGroups = new HashMap<>();
     private State state = State.INITIALIZED;
@@ -104,7 +105,7 @@ public class SourcePartitionedScheduler
             SplitSource splitSource,
             SplitPlacementPolicy splitPlacementPolicy,
             int splitBatchSize,
-            boolean autoDropCompletedLifespans)
+            boolean groupedExecution)
     {
         this.stage = requireNonNull(stage, "stage is null");
         this.partitionedNode = requireNonNull(partitionedNode, "partitionedNode is null");
@@ -113,8 +114,12 @@ public class SourcePartitionedScheduler
 
         checkArgument(splitBatchSize > 0, "splitBatchSize must be at least one");
         this.splitBatchSize = splitBatchSize;
+        this.groupedExecution = groupedExecution;
+    }
 
-        this.autoDropCompletedLifespans = autoDropCompletedLifespans;
+    public PlanNodeId getPlanNodeId()
+    {
+        return partitionedNode;
     }
 
     /**
@@ -124,46 +129,72 @@ public class SourcePartitionedScheduler
      * This returns an ungrouped {@code SourcePartitionedScheduler} that requires
      * minimal management from the caller, which is ideal for use as a stage scheduler.
      */
-    public static SourcePartitionedScheduler simpleSourcePartitionedScheduler(
+    public static StageScheduler newSourcePartitionedSchedulerAsStageScheduler(
             SqlStageExecution stage,
             PlanNodeId partitionedNode,
             SplitSource splitSource,
             SplitPlacementPolicy splitPlacementPolicy,
             int splitBatchSize)
     {
-        SourcePartitionedScheduler result = new SourcePartitionedScheduler(stage, partitionedNode, splitSource, splitPlacementPolicy, splitBatchSize, true);
-        result.startLifespan(Lifespan.taskWide(), NOT_PARTITIONED);
-        return result;
+        SourcePartitionedScheduler sourcePartitionedScheduler = new SourcePartitionedScheduler(stage, partitionedNode, splitSource, splitPlacementPolicy, splitBatchSize, false);
+        sourcePartitionedScheduler.startLifespan(Lifespan.taskWide(), NOT_PARTITIONED);
+
+        return new StageScheduler() {
+            @Override
+            public ScheduleResult schedule()
+            {
+                ScheduleResult scheduleResult = sourcePartitionedScheduler.schedule();
+                sourcePartitionedScheduler.drainCompletelyScheduledLifespans();
+                return scheduleResult;
+            }
+
+            @Override
+            public void close()
+            {
+                sourcePartitionedScheduler.close();
+            }
+        };
     }
 
     /**
-     * Obtains an instance of {@code SourcePartitionedScheduler} suitable for use
-     * in FixedSourcePartitionedScheduler.
+     * Obtains a {@code SourceScheduler} suitable for use in FixedSourcePartitionedScheduler.
      * <p>
-     * This returns a {@code SourcePartitionedScheduler} that can be used for a pipeline
+     * This returns a {@code SourceScheduler} that can be used for a pipeline
      * that is either ungrouped or grouped. However, the caller is responsible initializing
      * the driver groups in this scheduler accordingly.
      * <p>
-     * Besides, the caller is required to poll {@link #drainCompletedLifespans()}
+     * Besides, the caller is required to poll {@link #drainCompletelyScheduledLifespans()}
      * in addition to {@link #schedule()} on the returned object. Otherwise, lifecycle
      * transitioning of the object will not work properly.
      */
-    public static SourcePartitionedScheduler managedSourcePartitionedScheduler(
+    public static SourceScheduler newSourcePartitionedSchedulerAsSourceScheduler(
             SqlStageExecution stage,
             PlanNodeId partitionedNode,
             SplitSource splitSource,
             SplitPlacementPolicy splitPlacementPolicy,
-            int splitBatchSize)
+            int splitBatchSize,
+            boolean groupedExecution)
     {
-        return new SourcePartitionedScheduler(stage, partitionedNode, splitSource, splitPlacementPolicy, splitBatchSize, false);
+        return new SourcePartitionedScheduler(stage, partitionedNode, splitSource, splitPlacementPolicy, splitBatchSize, groupedExecution);
     }
 
+    @Override
     public synchronized void startLifespan(Lifespan lifespan, ConnectorPartitionHandle partitionHandle)
     {
         checkState(state == State.INITIALIZED || state == State.SPLITS_ADDED);
+        lifespanAdded = true;
         scheduleGroups.put(lifespan, new ScheduleGroup(partitionHandle));
         whenFinishedOrNewLifespanAdded.set(null);
         whenFinishedOrNewLifespanAdded = SettableFuture.create();
+    }
+
+    @Override
+    public synchronized void rewindLifespan(Lifespan lifespan, ConnectorPartitionHandle partitionHandle)
+    {
+        checkState(state == State.INITIALIZED || state == State.SPLITS_ADDED, "Current state %s is not rewindable", state);
+        checkState(lifespanAdded, "Cannot rewind lifespan without any lifespan added before");
+        scheduleGroups.remove(lifespan);
+        splitSource.rewind(partitionHandle);
     }
 
     @Override
@@ -181,15 +212,14 @@ public class SourcePartitionedScheduler
         for (Entry<Lifespan, ScheduleGroup> entry : scheduleGroups.entrySet()) {
             Lifespan lifespan = entry.getKey();
             ScheduleGroup scheduleGroup = entry.getValue();
-            Set<Split> pendingSplits = scheduleGroup.pendingSplits;
 
-            if (scheduleGroup.state != ScheduleGroupState.DISCOVERING_SPLITS) {
+            if (scheduleGroup.state == ScheduleGroupState.NO_MORE_SPLITS || scheduleGroup.state == ScheduleGroupState.DONE) {
                 verify(scheduleGroup.nextSplitBatchFuture == null);
             }
-            else if (pendingSplits.isEmpty()) {
+            else if (scheduleGroup.pendingSplits.isEmpty()) {
                 // try to get the next batch
                 if (scheduleGroup.nextSplitBatchFuture == null) {
-                    scheduleGroup.nextSplitBatchFuture = splitSource.getNextBatch(scheduleGroup.partitionHandle, lifespan, splitBatchSize - pendingSplits.size());
+                    scheduleGroup.nextSplitBatchFuture = splitSource.getNextBatch(scheduleGroup.partitionHandle, lifespan, splitBatchSize);
 
                     long start = System.nanoTime();
                     addSuccessCallback(scheduleGroup.nextSplitBatchFuture, () -> stage.recordGetSplitTime(start));
@@ -198,8 +228,21 @@ public class SourcePartitionedScheduler
                 if (scheduleGroup.nextSplitBatchFuture.isDone()) {
                     SplitBatch nextSplits = getFutureValue(scheduleGroup.nextSplitBatchFuture);
                     scheduleGroup.nextSplitBatchFuture = null;
-                    pendingSplits.addAll(nextSplits.getSplits());
-                    if (nextSplits.isLastBatch() && scheduleGroup.state == ScheduleGroupState.DISCOVERING_SPLITS) {
+                    scheduleGroup.pendingSplits = new HashSet<>(nextSplits.getSplits());
+                    if (nextSplits.isLastBatch()) {
+                        if (scheduleGroup.state == ScheduleGroupState.INITIALIZED && scheduleGroup.pendingSplits.isEmpty()) {
+                            // Add an empty split in case no splits have been produced for the source.
+                            // For source operators, they never take input, but they may produce output.
+                            // This is well handled by Presto execution engine.
+                            // However, there are certain non-source operators that may produce output without any input,
+                            // for example, 1) an AggregationOperator, 2) a HashAggregationOperator where one of the grouping sets is ().
+                            // Scheduling an empty split kicks off necessary driver instantiation to make this work.
+                            scheduleGroup.pendingSplits.add(new Split(
+                                    splitSource.getConnectorId(),
+                                    splitSource.getTransactionHandle(),
+                                    new EmptySplit(splitSource.getConnectorId()),
+                                    lifespan));
+                        }
                         scheduleGroup.state = ScheduleGroupState.NO_MORE_SPLITS;
                     }
                 }
@@ -210,26 +253,30 @@ public class SourcePartitionedScheduler
                 }
             }
 
-            Multimap<Node, Split> splitAssignment = ImmutableMultimap.of();
-            if (!pendingSplits.isEmpty()) {
+            Multimap<InternalNode, Split> splitAssignment = ImmutableMultimap.of();
+            if (!scheduleGroup.pendingSplits.isEmpty()) {
                 if (!scheduleGroup.placementFuture.isDone()) {
+                    anyBlockedOnPlacements = true;
                     continue;
                 }
 
+                if (scheduleGroup.state == ScheduleGroupState.INITIALIZED) {
+                    scheduleGroup.state = ScheduleGroupState.SPLITS_ADDED;
+                }
                 if (state == State.INITIALIZED) {
                     state = State.SPLITS_ADDED;
                 }
 
                 // calculate placements for splits
-                SplitPlacementResult splitPlacementResult = splitPlacementPolicy.computeAssignments(pendingSplits);
+                SplitPlacementResult splitPlacementResult = splitPlacementPolicy.computeAssignments(scheduleGroup.pendingSplits);
                 splitAssignment = splitPlacementResult.getAssignments();
 
                 // remove splits with successful placements
-                splitAssignment.values().forEach(pendingSplits::remove); // AbstractSet.removeAll performs terribly here.
+                splitAssignment.values().forEach(scheduleGroup.pendingSplits::remove); // AbstractSet.removeAll performs terribly here.
                 overallSplitAssignmentCount += splitAssignment.size();
 
                 // if not completed placed, mark scheduleGroup as blocked on placement
-                if (!pendingSplits.isEmpty()) {
+                if (!scheduleGroup.pendingSplits.isEmpty()) {
                     scheduleGroup.placementFuture = splitPlacementResult.getBlocked();
                     overallBlockedFutures.add(scheduleGroup.placementFuture);
                     anyBlockedOnPlacements = true;
@@ -237,11 +284,11 @@ public class SourcePartitionedScheduler
             }
 
             // if no new splits will be assigned, update state and attach completion event
-            Multimap<Node, Lifespan> noMoreSplitsNotification = ImmutableMultimap.of();
-            if (pendingSplits.isEmpty() && scheduleGroup.state == ScheduleGroupState.NO_MORE_SPLITS) {
+            Multimap<InternalNode, Lifespan> noMoreSplitsNotification = ImmutableMultimap.of();
+            if (scheduleGroup.pendingSplits.isEmpty() && scheduleGroup.state == ScheduleGroupState.NO_MORE_SPLITS) {
                 scheduleGroup.state = ScheduleGroupState.DONE;
                 if (!lifespan.isTaskWide()) {
-                    Node node = ((FixedSplitPlacementPolicy) splitPlacementPolicy).getNodeForBucket(lifespan.getId());
+                    InternalNode node = ((BucketedSplitPlacementPolicy) splitPlacementPolicy).getNodeForBucket(lifespan.getId());
                     noMoreSplitsNotification = ImmutableMultimap.of(node, lifespan);
                 }
             }
@@ -261,10 +308,6 @@ public class SourcePartitionedScheduler
             }
         }
 
-        if (autoDropCompletedLifespans) {
-            drainCompletedLifespans();
-        }
-
         // * `splitSource.isFinished` invocation may fail after `splitSource.close` has been invoked.
         //   If state is NO_MORE_SPLITS/FINISHED, splitSource.isFinished has previously returned true, and splitSource is closed now.
         // * Even if `splitSource.isFinished()` return true, it is not necessarily safe to tear down the split source.
@@ -272,15 +315,17 @@ public class SourcePartitionedScheduler
         //     which may contain recently published splits. We must not ignore those.
         //   * If any scheduleGroup is still in DISCOVERING_SPLITS state, it means it hasn't realized that there will be no more splits.
         //     Next time it invokes getNextBatch, it will realize that. However, the invocation will fail we tear down splitSource now.
-        if ((state == State.NO_MORE_SPLITS || state == State.FINISHED) || (scheduleGroups.isEmpty() && splitSource.isFinished())) {
+        //
+        // Since grouped execution is going to support failure recovery, and scheduled splits might have to be rescheduled during retry,
+        // we can no longer claim schedule is complete after all splits are scheduled.
+        // Splits schedule can only be considered as finished when all lifespan executions are done
+        // (by calling `notifyAllLifespansFinishedExecution`)
+        if ((state == State.NO_MORE_SPLITS || state == State.FINISHED) || (!groupedExecution && lifespanAdded && scheduleGroups.isEmpty() && splitSource.isFinished())) {
             switch (state) {
                 case INITIALIZED:
-                    // we have not scheduled a single split so far
-                    state = State.SPLITS_ADDED;
-                    ScheduleResult emptySplitScheduleResult = scheduleEmptySplit();
-                    overallNewTasks.addAll(emptySplitScheduleResult.getNewTasks());
-                    overallSplitAssignmentCount++;
-                    // fall through
+                    // We have not scheduled a single split so far.
+                    // But this shouldn't be possible. See usage of EmptySplit in this method.
+                    throw new IllegalStateException("At least 1 split should have been scheduled for this plan node");
                 case SPLITS_ADDED:
                     state = State.NO_MORE_SPLITS;
                     splitSource.close();
@@ -290,7 +335,7 @@ public class SourcePartitionedScheduler
                     whenFinishedOrNewLifespanAdded.set(null);
                     // fall through
                 case FINISHED:
-                    return new ScheduleResult(
+                    return ScheduleResult.nonBlocked(
                             true,
                             overallNewTasks.build(),
                             overallSplitAssignmentCount);
@@ -300,11 +345,25 @@ public class SourcePartitionedScheduler
         }
 
         if (anyNotBlocked) {
-            return new ScheduleResult(false, overallNewTasks.build(), overallSplitAssignmentCount);
+            return ScheduleResult.nonBlocked(false, overallNewTasks.build(), overallSplitAssignmentCount);
         }
 
-        // Only try to finalize task creation when scheduling would block
-        overallNewTasks.addAll(finalizeTaskCreationIfNecessary());
+        if (anyBlockedOnPlacements) {
+            // In a broadcast join, output buffers of the tasks in build source stage have to
+            // hold onto all data produced before probe side task scheduling finishes,
+            // even if the data is acknowledged by all known consumers. This is because
+            // new consumers may be added until the probe side task scheduling finishes.
+            //
+            // As a result, the following line is necessary to prevent deadlock
+            // due to neither build nor probe can make any progress.
+            // The build side blocks due to a full output buffer.
+            // In the meantime the probe side split cannot be consumed since
+            // builder side hash table construction has not finished.
+            //
+            // TODO: When SourcePartitionedScheduler is used as a SourceScheduler, it shouldn't need to worry about
+            //  task scheduling and creation -- these are done by the StageScheduler.
+            overallNewTasks.addAll(finalizeTaskCreationIfNecessary());
+        }
 
         ScheduleResult.BlockedReason blockedReason;
         if (anyBlockedOnNextSplitBatch) {
@@ -315,7 +374,7 @@ public class SourcePartitionedScheduler
         }
 
         overallBlockedFutures.add(whenFinishedOrNewLifespanAdded);
-        return new ScheduleResult(
+        return ScheduleResult.blocked(
                 false,
                 overallNewTasks.build(),
                 nonCancellationPropagating(whenAnyComplete(overallBlockedFutures)),
@@ -348,7 +407,8 @@ public class SourcePartitionedScheduler
         splitSource.close();
     }
 
-    public synchronized List<Lifespan> drainCompletedLifespans()
+    @Override
+    public synchronized List<Lifespan> drainCompletelyScheduledLifespans()
     {
         if (scheduleGroups.isEmpty()) {
             // Invoking splitSource.isFinished would fail if it was already closed, which is possible if scheduleGroups is empty.
@@ -375,39 +435,33 @@ public class SourcePartitionedScheduler
         return result.build();
     }
 
-    private ScheduleResult scheduleEmptySplit()
+    @Override
+    public synchronized void notifyAllLifespansFinishedExecution()
     {
-        state = State.SPLITS_ADDED;
-
-        List<Node> nodes = splitPlacementPolicy.allNodes();
-        checkCondition(!nodes.isEmpty(), NO_NODES_AVAILABLE, "No nodes available to run query");
-        Node node = nodes.iterator().next();
-
-        Split emptySplit = new Split(
-                splitSource.getConnectorId(),
-                splitSource.getTransactionHandle(),
-                new EmptySplit(splitSource.getConnectorId()));
-        Set<RemoteTask> emptyTask = assignSplits(ImmutableMultimap.of(node, emptySplit), ImmutableMultimap.of());
-        return new ScheduleResult(false, emptyTask, 1);
+        checkState(groupedExecution);
+        state = State.FINISHED;
+        splitSource.close();
+        whenFinishedOrNewLifespanAdded.set(null);
     }
 
-    private Set<RemoteTask> assignSplits(Multimap<Node, Split> splitAssignment, Multimap<Node, Lifespan> noMoreSplitsNotification)
+    private Set<RemoteTask> assignSplits(Multimap<InternalNode, Split> splitAssignment, Multimap<InternalNode, Lifespan> noMoreSplitsNotification)
     {
         ImmutableSet.Builder<RemoteTask> newTasks = ImmutableSet.builder();
 
-        ImmutableSet<Node> nodes = ImmutableSet.<Node>builder()
+        ImmutableSet<InternalNode> nodes = ImmutableSet.<InternalNode>builder()
                 .addAll(splitAssignment.keySet())
                 .addAll(noMoreSplitsNotification.keySet())
                 .build();
-        for (Node node : nodes) {
-            // source partitioned tasks can only receive broadcast data; otherwise it would have a different distribution
+        for (InternalNode node : nodes) {
             ImmutableMultimap<PlanNodeId, Split> splits = ImmutableMultimap.<PlanNodeId, Split>builder()
                     .putAll(partitionedNode, splitAssignment.get(node))
                     .build();
+
             ImmutableMultimap.Builder<PlanNodeId, Lifespan> noMoreSplits = ImmutableMultimap.builder();
             if (noMoreSplitsNotification.containsKey(node)) {
                 noMoreSplits.putAll(partitionedNode, noMoreSplitsNotification.get(node));
             }
+
             newTasks.addAll(stage.scheduleSplits(
                     node,
                     splits,
@@ -425,14 +479,14 @@ public class SourcePartitionedScheduler
 
         splitPlacementPolicy.lockDownNodes();
 
-        Set<Node> scheduledNodes = stage.getScheduledNodes();
+        Set<InternalNode> scheduledNodes = stage.getScheduledNodes();
         Set<RemoteTask> newTasks = splitPlacementPolicy.allNodes().stream()
                 .filter(node -> !scheduledNodes.contains(node))
                 .flatMap(node -> stage.scheduleSplits(node, ImmutableMultimap.of(), ImmutableMultimap.of()).stream())
                 .collect(toImmutableSet());
 
         // notify listeners that we have scheduled all tasks so they can set no more buffers or exchange splits
-        stage.transitionToSchedulingSplits();
+        stage.transitionToFinishedTaskScheduling();
 
         return newTasks;
     }
@@ -442,8 +496,8 @@ public class SourcePartitionedScheduler
         public final ConnectorPartitionHandle partitionHandle;
         public ListenableFuture<SplitBatch> nextSplitBatchFuture;
         public ListenableFuture<?> placementFuture = Futures.immediateFuture(null);
-        public final Set<Split> pendingSplits = new HashSet<>();
-        public ScheduleGroupState state = ScheduleGroupState.DISCOVERING_SPLITS;
+        public Set<Split> pendingSplits = new HashSet<>();
+        public ScheduleGroupState state = ScheduleGroupState.INITIALIZED;
 
         public ScheduleGroup(ConnectorPartitionHandle partitionHandle)
         {
@@ -454,9 +508,14 @@ public class SourcePartitionedScheduler
     private enum ScheduleGroupState
     {
         /**
-         * The underlying SplitSource is not complete.
+         * No splits have been added to pendingSplits set.
          */
-        DISCOVERING_SPLITS,
+        INITIALIZED,
+
+        /**
+         * At least one split has been added to pendingSplits set.
+         */
+        SPLITS_ADDED,
 
         /**
          * All splits from underlying SplitSource has been discovered.

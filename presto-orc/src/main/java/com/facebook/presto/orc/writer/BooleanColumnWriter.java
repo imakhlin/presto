@@ -57,6 +57,7 @@ public class BooleanColumnWriter
     private final PresentOutputStream presentStream;
 
     private final List<ColumnStatistics> rowGroupColumnStatistics = new ArrayList<>();
+    private long columnStatisticsRetainedSizeInBytes;
 
     private BooleanStatisticsBuilder statisticsBuilder = new BooleanStatisticsBuilder();
 
@@ -112,6 +113,7 @@ public class BooleanColumnWriter
         checkState(!closed);
         ColumnStatistics statistics = statisticsBuilder.buildColumnStatistics();
         rowGroupColumnStatistics.add(statistics);
+        columnStatisticsRetainedSizeInBytes += statistics.getRetainedSizeInBytes();
         statisticsBuilder = new BooleanStatisticsBuilder();
         return ImmutableMap.of(column, statistics);
     }
@@ -186,8 +188,7 @@ public class BooleanColumnWriter
     @Override
     public long getRetainedBytes()
     {
-        // NOTE: we do not include stats because they should be small and it would be annoying to calculate the size
-        return INSTANCE_SIZE + dataStream.getRetainedBytes() + presentStream.getRetainedBytes();
+        return INSTANCE_SIZE + dataStream.getRetainedBytes() + presentStream.getRetainedBytes() + columnStatisticsRetainedSizeInBytes;
     }
 
     @Override
@@ -197,6 +198,7 @@ public class BooleanColumnWriter
         dataStream.reset();
         presentStream.reset();
         rowGroupColumnStatistics.clear();
+        columnStatisticsRetainedSizeInBytes = 0;
         statisticsBuilder = new BooleanStatisticsBuilder();
     }
 }

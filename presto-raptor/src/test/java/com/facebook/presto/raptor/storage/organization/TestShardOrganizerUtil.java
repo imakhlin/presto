@@ -83,7 +83,7 @@ public class TestShardOrganizerUtil
         createTablesWithRetry(dbi);
         dataDir = Files.createTempDir();
 
-        metadata = new RaptorMetadata("raptor", dbi, createShardManager(dbi));
+        metadata = new RaptorMetadata("raptor", dbi, createShardManager(dbi), new TypeRegistry());
 
         metadataDao = dbi.onDemand(MetadataDao.class);
         shardManager = createShardManager(dbi);
@@ -105,12 +105,12 @@ public class TestShardOrganizerUtil
 
         SchemaTableName tableName = new SchemaTableName("default", "test");
         metadata.createTable(SESSION, tableMetadataBuilder(tableName)
-                .column("orderkey", BIGINT)
-                .column("orderdate", DATE)
-                .column("orderstatus", createVarcharType(3))
-                .property("ordering", ImmutableList.of("orderstatus", "orderkey"))
-                .property("temporal_column", "orderdate")
-                .build(),
+                        .column("orderkey", BIGINT)
+                        .column("orderdate", DATE)
+                        .column("orderstatus", createVarcharType(3))
+                        .property("ordering", ImmutableList.of("orderstatus", "orderkey"))
+                        .property("temporal_column", "orderdate")
+                        .build(),
                 false);
         Table tableInfo = metadataDao.getTableInformation(tableName.getSchemaName(), tableName.getTableName());
         List<TableColumn> tableColumns = metadataDao.listTableColumns(tableInfo.getTableId());

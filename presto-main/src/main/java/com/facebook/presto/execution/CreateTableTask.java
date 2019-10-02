@@ -14,15 +14,15 @@
 package com.facebook.presto.execution;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.QualifiedObjectName;
-import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.metadata.TableMetadata;
 import com.facebook.presto.security.AccessControl;
 import com.facebook.presto.spi.ColumnMetadata;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.analyzer.SemanticException;
 import com.facebook.presto.sql.tree.ColumnDefinition;
@@ -48,6 +48,7 @@ import static com.facebook.presto.metadata.MetadataUtil.createQualifiedObjectNam
 import static com.facebook.presto.spi.StandardErrorCode.ALREADY_EXISTS;
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_FOUND;
+import static com.facebook.presto.spi.connector.ConnectorCapabilities.NOT_NULL_COLUMN_CONSTRAINT;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.sql.NodeUtils.mapFromProperties;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.DUPLICATE_COLUMN_NAME;
@@ -95,6 +96,9 @@ public class CreateTableTask
             return immediateFuture(null);
         }
 
+        ConnectorId connectorId = metadata.getCatalogHandle(session, tableName.getCatalogName())
+                .orElseThrow(() -> new PrestoException(NOT_FOUND, "Catalog does not exist: " + tableName.getCatalogName()));
+
         LinkedHashMap<String, ColumnMetadata> columns = new LinkedHashMap<>();
         Map<String, Object> inheritedProperties = ImmutableMap.of();
         boolean includingProperties = false;
@@ -115,7 +119,26 @@ public class CreateTableTask
                 if (columns.containsKey(name)) {
                     throw new SemanticException(DUPLICATE_COLUMN_NAME, column, "Column name '%s' specified more than once", column.getName());
                 }
-                columns.put(name, new ColumnMetadata(name, type, column.getComment().orElse(null), false));
+                if (!column.isNullable() && !metadata.getConnectorCapabilities(session, connectorId).contains(NOT_NULL_COLUMN_CONSTRAINT)) {
+                    throw new SemanticException(NOT_SUPPORTED, column, "Catalog '%s' does not support non-null column for column name '%s'", connectorId.getCatalogName(), column.getName());
+                }
+
+                Map<String, Expression> sqlProperties = mapFromProperties(column.getProperties());
+                Map<String, Object> columnProperties = metadata.getColumnPropertyManager().getProperties(
+                        connectorId,
+                        tableName.getCatalogName(),
+                        sqlProperties,
+                        session,
+                        metadata,
+                        parameters);
+
+                columns.put(name, new ColumnMetadata(
+                        name,
+                        type,
+                        column.isNullable(), column.getComment().orElse(null),
+                        null,
+                        false,
+                        columnProperties));
             }
             else if (element instanceof LikeClause) {
                 LikeClause likeClause = (LikeClause) element;
@@ -156,9 +179,6 @@ public class CreateTableTask
 
         accessControl.checkCanCreateTable(session.getRequiredTransactionId(), session.getIdentity(), tableName);
 
-        ConnectorId connectorId = metadata.getCatalogHandle(session, tableName.getCatalogName())
-                .orElseThrow(() -> new PrestoException(NOT_FOUND, "Catalog does not exist: " + tableName.getCatalogName()));
-
         Map<String, Expression> sqlProperties = mapFromProperties(statement.getProperties());
         Map<String, Object> properties = metadata.getTablePropertyManager().getProperties(
                 connectorId,
@@ -185,8 +205,7 @@ public class CreateTableTask
 
     private static Map<String, Object> combineProperties(Set<String> specifiedPropertyKeys, Map<String, Object> defaultProperties, Map<String, Object> inheritedProperties)
     {
-        Map<String, Object> finalProperties = new HashMap<>();
-        finalProperties.putAll(inheritedProperties);
+        Map<String, Object> finalProperties = new HashMap<>(inheritedProperties);
         for (Map.Entry<String, Object> entry : defaultProperties.entrySet()) {
             if (specifiedPropertyKeys.contains(entry.getKey()) || !finalProperties.containsKey(entry.getKey())) {
                 finalProperties.put(entry.getKey(), entry.getValue());

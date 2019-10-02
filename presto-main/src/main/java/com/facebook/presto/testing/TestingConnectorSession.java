@@ -16,7 +16,7 @@ package com.facebook.presto.testing;
 import com.facebook.presto.execution.QueryIdGenerator;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.security.Identity;
+import com.facebook.presto.spi.security.ConnectorIdentity;
 import com.facebook.presto.spi.session.PropertyMetadata;
 import com.facebook.presto.spi.type.TimeZoneKey;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
@@ -42,8 +42,7 @@ public class TestingConnectorSession
     public static final ConnectorSession SESSION = new TestingConnectorSession(ImmutableList.of());
 
     private final String queryId;
-    private final String path;
-    private final Identity identity;
+    private final ConnectorIdentity identity;
     private final Optional<String> source;
     private final TimeZoneKey timeZoneKey;
     private final Locale locale;
@@ -55,12 +54,11 @@ public class TestingConnectorSession
 
     public TestingConnectorSession(List<PropertyMetadata<?>> properties)
     {
-        this("user", "path", Optional.of("test"), Optional.empty(), UTC_KEY, ENGLISH, System.currentTimeMillis(), properties, ImmutableMap.of(), new FeaturesConfig().isLegacyTimestamp());
+        this("user", Optional.of("test"), Optional.empty(), UTC_KEY, ENGLISH, System.currentTimeMillis(), properties, ImmutableMap.of(), new FeaturesConfig().isLegacyTimestamp());
     }
 
     public TestingConnectorSession(
             String user,
-            String path,
             Optional<String> source,
             Optional<String> traceToken,
             TimeZoneKey timeZoneKey,
@@ -71,8 +69,7 @@ public class TestingConnectorSession
             boolean isLegacyTimestamp)
     {
         this.queryId = queryIdGenerator.createNextQueryId().toString();
-        this.path = requireNonNull(path, "path is null");
-        this.identity = new Identity(requireNonNull(user, "user is null"), Optional.empty());
+        this.identity = new ConnectorIdentity(requireNonNull(user, "user is null"), Optional.empty(), Optional.empty());
         this.source = requireNonNull(source, "source is null");
         this.traceToken = requireNonNull(traceToken, "traceToken is null");
         this.timeZoneKey = requireNonNull(timeZoneKey, "timeZoneKey is null");
@@ -96,13 +93,7 @@ public class TestingConnectorSession
     }
 
     @Override
-    public String getPath()
-    {
-        return path;
-    }
-
-    @Override
-    public Identity getIdentity()
+    public ConnectorIdentity getIdentity()
     {
         return identity;
     }
@@ -135,12 +126,6 @@ public class TestingConnectorSession
     public boolean isLegacyTimestamp()
     {
         return isLegacyTimestamp;
-    }
-
-    @Override
-    public boolean isLegacyRoundNBigint()
-    {
-        return false;
     }
 
     @Override

@@ -286,6 +286,54 @@ public class TestStringFunctions
         testStrPosAndPosition(null, "", null);
         testStrPosAndPosition("", null, null);
         testStrPosAndPosition(null, null, null);
+
+        assertFunction("STRPOS('abc/xyz/foo/bar', '/', 1)", BIGINT, 4L);
+        assertFunction("STRPOS('abc/xyz/foo/bar', '/', 2)", BIGINT, 8L);
+        assertFunction("STRPOS('abc/xyz/foo/bar', '/', 3)", BIGINT, 12L);
+        assertFunction("STRPOS('abc/xyz/foo/bar', '/', 4)", BIGINT, 0L);
+        assertFunction("STRPOS('highhigh', 'ig', 1)", BIGINT, 2L);
+        assertFunction("STRPOS('foobarfoo', 'fb', 1)", BIGINT, 0L);
+        assertFunction("STRPOS('foobarfoo', 'oo', 1)", BIGINT, 2L);
+        // Assert invalid instance argument
+        assertInvalidFunction("STRPOS('abc/xyz/foo/bar', '/', 0)", "'instance' must be a positive number.");
+        assertInvalidFunction("STRPOS('', '', 0)", "'instance' must be a positive number.");
+        assertInvalidFunction("STRPOS('highhigh', 'ig', -1)", "'instance' must be a positive number.");
+        assertInvalidFunction("STRPOS('foobarfoo', 'oo', -2)", "'instance' must be a positive number.");
+    }
+
+    @Test
+    public void testStringReversePosition()
+    {
+        assertFunction("STRRPOS('high', 'ig')", BIGINT, 2L);
+        assertFunction("STRRPOS('high', 'igx')", BIGINT, 0L);
+        assertFunction("STRRPOS('Quadratically', 'a')", BIGINT, 10L);
+        assertFunction("STRRPOS('foobar', 'foobar')", BIGINT, 1L);
+        assertFunction("STRRPOS('foobar', 'obar')", BIGINT, 3L);
+        assertFunction("STRRPOS('zoo!', '!')", BIGINT, 4L);
+        assertFunction("STRRPOS('x', '')", BIGINT, 1L);
+        assertFunction("STRRPOS('', '')", BIGINT, 1L);
+
+        assertFunction("STRRPOS('\u4FE1\u5FF5,\u7231,\u5E0C\u671B', '\u7231')", BIGINT, 2L);
+        assertFunction("STRRPOS('\u4FE1\u5FF5,\u7231,\u5E0C\u671B', '\u5E0C\u671B')", BIGINT, 3L);
+        assertFunction("STRRPOS('\u4FE1\u5FF5,\u7231,\u5E0C\u671B', 'nice')", BIGINT, 0L);
+
+        assertFunction("STRRPOS(NULL, '')", BIGINT, null);
+        assertFunction("STRRPOS('', NULL)", BIGINT, null);
+        assertFunction("STRRPOS(NULL, NULL)", BIGINT, null);
+
+        assertFunction("STRRPOS('abc/xyz/foo/bar', '/')", BIGINT, 12L);
+        assertFunction("STRRPOS('abc/xyz/foo/bar', '/', 1)", BIGINT, 12L);
+        assertFunction("STRRPOS('abc/xyz/foo/bar', '/', 2)", BIGINT, 8L);
+        assertFunction("STRRPOS('abc/xyz/foo/bar', '/', 3)", BIGINT, 4L);
+        assertFunction("STRRPOS('abc/xyz/foo/bar', '/', 4)", BIGINT, 0L);
+        assertFunction("STRRPOS('highhigh', 'ig', 1)", BIGINT, 6L);
+        assertFunction("STRRPOS('highhigh', 'ig', 2)", BIGINT, 2L);
+        assertFunction("STRRPOS('foobarfoo', 'fb', 1)", BIGINT, 0L);
+        assertFunction("STRRPOS('foobarfoo', 'oo', 1)", BIGINT, 8L);
+        // Assert invalid instance argument
+        assertInvalidFunction("STRRPOS('abc/xyz/foo/bar', '/', 0)", "'instance' must be a positive number.");
+        assertInvalidFunction("STRRPOS('', '', 0)", "'instance' must be a positive number.");
+        assertInvalidFunction("STRRPOS('foobarfoo', 'obar', -1)", "'instance' must be a positive number.");
     }
 
     private void testStrPosAndPosition(String string, String substring, Long expected)
@@ -390,6 +438,7 @@ public class TestStringFunctions
         assertFunction("SPLIT('a.b.c.', '.', 3)", new ArrayType(createVarcharType(6)), ImmutableList.of("a", "b", "c."));
         assertFunction("SPLIT('...', '.')", new ArrayType(createVarcharType(3)), ImmutableList.of("", "", "", ""));
         assertFunction("SPLIT('..a...a..', '.')", new ArrayType(createVarcharType(9)), ImmutableList.of("", "", "a", "", "", "a", "", ""));
+        assertFunction("SPLIT('a.b.', '')", new ArrayType(createVarcharType(4)), ImmutableList.of("a", ".", "b", ".", ""));
 
         // Test SPLIT for non-ASCII
         assertFunction("SPLIT('\u4FE1\u5FF5,\u7231,\u5E0C\u671B', ',', 3)", new ArrayType(createVarcharType(7)), ImmutableList.of("\u4FE1\u5FF5", "\u7231", "\u5E0C\u671B"));
@@ -401,7 +450,6 @@ public class TestStringFunctions
         assertFunction("SPLIT('a..b..c', '.', 3)", new ArrayType(createVarcharType(7)), ImmutableList.of("a", "", "b..c"));
         assertFunction("SPLIT('a.b..', '.', 3)", new ArrayType(createVarcharType(5)), ImmutableList.of("a", "b", "."));
 
-        assertInvalidFunction("SPLIT('a.b.c', '', 1)", "The delimiter may not be the empty string");
         assertInvalidFunction("SPLIT('a.b.c', '.', 0)", "Limit must be positive");
         assertInvalidFunction("SPLIT('a.b.c', '.', -1)", "Limit must be positive");
         assertInvalidFunction("SPLIT('a.b.c', '.', 2147483648)", "Limit is too large");
@@ -417,6 +465,8 @@ public class TestStringFunctions
         assertFunction("SPLIT_TO_MAP('=', ',', '=')", expectedType, ImmutableMap.of("", ""));
         assertFunction("SPLIT_TO_MAP('key=>value', ',', '=>')", expectedType, ImmutableMap.of("key", "value"));
         assertFunction("SPLIT_TO_MAP('key => value', ',', '=>')", expectedType, ImmutableMap.of("key ", " value"));
+        assertFunction("SPLIT_TO_MAP('a:1;b:2;a:3', ';', ':', (k, v1, v2) -> v1)", expectedType, ImmutableMap.of("a", "1", "b", "2"));
+        assertFunction("SPLIT_TO_MAP('a:1;b:2;a:3', ';', ':', (k, v1, v2) -> CONCAT(v1, v2))", expectedType, ImmutableMap.of("a", "13", "b", "2"));
 
         // Test SPLIT_TO_MAP for non-ASCII
         assertFunction("SPLIT_TO_MAP('\u4EA0\u4EFF\u4EA1', '\u4E00', '\u4EFF')", expectedType, ImmutableMap.of("\u4EA0", "\u4EA1"));
@@ -430,8 +480,10 @@ public class TestStringFunctions
         assertInvalidFunction("SPLIT_TO_MAP('a=123,b=.4,c=', '=', '=')", "entryDelimiter and keyValueDelimiter must not be the same");
 
         // Duplicate keys are not allowed to exist.
-        assertInvalidFunction("SPLIT_TO_MAP('a=123,a=.4', ',', '=')", "Duplicate keys (a) are not allowed");
-        assertInvalidFunction("SPLIT_TO_MAP('\u4EA0\u4EFF\u4EA1\u4E00\u4EA0\u4EFF\u4EB1', '\u4E00', '\u4EFF')", "Duplicate keys (\u4EA0) are not allowed");
+        assertInvalidFunction("SPLIT_TO_MAP('a=123,a=.4', ',', '=')", "Duplicate keys (a) are not allowed. Specifying a lambda to resolve conflicts can avoid this error");
+        assertInvalidFunction(
+                "SPLIT_TO_MAP('\u4EA0\u4EFF\u4EA1\u4E00\u4EA0\u4EFF\u4EB1', '\u4E00', '\u4EFF')",
+                "Duplicate keys (\u4EA0) are not allowed. Specifying a lambda to resolve conflicts can avoid this error");
 
         // Key-value delimiter must appear exactly once in each entry.
         assertInvalidFunction("SPLIT_TO_MAP('key', ',', '=')", "Key-value delimiter must appear exactly once in each entry. Bad input: 'key'");

@@ -14,11 +14,12 @@
 package com.facebook.presto.sql.planner.optimizations;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.warnings.WarningCollector;
+import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.OptimizerStatsRecorder;
-import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
-import com.facebook.presto.sql.planner.SymbolAllocator;
+import com.facebook.presto.sql.planner.PlanVariableAllocator;
 import com.facebook.presto.sql.planner.TypeProvider;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 
 import static java.util.Objects.requireNonNull;
 
@@ -39,14 +40,15 @@ public final class StatsRecordingPlanOptimizer
             PlanNode plan,
             Session session,
             TypeProvider types,
-            SymbolAllocator symbolAllocator,
-            PlanNodeIdAllocator idAllocator)
+            PlanVariableAllocator variableAllocator,
+            PlanNodeIdAllocator idAllocator,
+            WarningCollector warningCollector)
     {
         PlanNode result;
         long duration;
         try {
             long start = System.nanoTime();
-            result = delegate.optimize(plan, session, types, symbolAllocator, idAllocator);
+            result = delegate.optimize(plan, session, types, variableAllocator, idAllocator, warningCollector);
             duration = System.nanoTime() - start;
         }
         catch (RuntimeException e) {

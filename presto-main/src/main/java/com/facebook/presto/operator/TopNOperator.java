@@ -16,8 +16,8 @@ package com.facebook.presto.operator;
 import com.facebook.presto.memory.context.LocalMemoryContext;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.SortOrder;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.collect.ImmutableList;
 
 import java.util.Iterator;
@@ -90,7 +90,6 @@ public class TopNOperator
 
     private final OperatorContext operatorContext;
     private final LocalMemoryContext localUserMemoryContext;
-    private final List<Type> types;
 
     private GroupedTopNBuilder topNBuilder;
     private boolean finishing;
@@ -106,8 +105,6 @@ public class TopNOperator
     {
         this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
         this.localUserMemoryContext = operatorContext.localUserMemoryContext();
-        this.types = requireNonNull(types, "types is null");
-
         checkArgument(n >= 0, "n must be positive");
 
         if (n == 0) {

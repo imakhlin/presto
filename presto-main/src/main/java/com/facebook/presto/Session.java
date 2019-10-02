@@ -13,13 +13,14 @@
  */
 package com.facebook.presto;
 
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.metadata.SessionPropertyManager;
 import com.facebook.presto.security.AccessControl;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.security.Identity;
+import com.facebook.presto.spi.security.SelectedRole;
 import com.facebook.presto.spi.session.ResourceEstimates;
 import com.facebook.presto.spi.type.TimeZoneKey;
 import com.facebook.presto.sql.SqlPath;
@@ -41,7 +42,10 @@ import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TimeZone;
+import java.util.stream.Collectors;
 
+import static com.facebook.presto.spi.ConnectorId.createInformationSchemaConnectorId;
+import static com.facebook.presto.spi.ConnectorId.createSystemTablesConnectorId;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_FOUND;
 import static com.facebook.presto.util.Failures.checkCondition;
 import static com.google.common.base.MoreObjects.toStringHelper;
@@ -133,6 +137,7 @@ public final class Session
                 .map(entry -> Maps.immutableEntry(entry.getKey(), ImmutableMap.copyOf(entry.getValue())))
                 .forEach(unprocessedCatalogPropertiesBuilder::put);
         this.unprocessedCatalogProperties = unprocessedCatalogPropertiesBuilder.build();
+
         checkArgument(!transactionId.isPresent() || unprocessedCatalogProperties.isEmpty(), "Catalog session properties cannot be set if there is an open transaction");
 
         checkArgument(catalog.isPresent() || !schema.isPresent(), "schema is set but catalog is not");
@@ -318,11 +323,36 @@ public final class Session
             connectorProperties.put(connectorId, catalogProperties);
         }
 
+        ImmutableMap.Builder<String, SelectedRole> roles = ImmutableMap.builder();
+        for (Entry<String, SelectedRole> entry : identity.getRoles().entrySet()) {
+            String catalogName = entry.getKey();
+            SelectedRole role = entry.getValue();
+
+            ConnectorId connectorId = transactionManager.getOptionalCatalogMetadata(transactionId, catalogName)
+                    .orElseThrow(() -> new PrestoException(NOT_FOUND, "Catalog does not exist: " + catalogName))
+                    .getConnectorId();
+
+            if (role.getType() == SelectedRole.Type.ROLE) {
+                accessControl.checkCanSetRole(transactionId, identity, role.getRole().get(), catalogName);
+            }
+            roles.put(connectorId.getCatalogName(), role);
+
+            String informationSchemaCatalogName = createInformationSchemaConnectorId(connectorId).getCatalogName();
+            if (transactionManager.getCatalogNames(transactionId).containsKey(informationSchemaCatalogName)) {
+                roles.put(createInformationSchemaConnectorId(connectorId).getCatalogName(), role);
+            }
+
+            String systemTablesCatalogName = createSystemTablesConnectorId(connectorId).getCatalogName();
+            if (transactionManager.getCatalogNames(transactionId).containsKey(systemTablesCatalogName)) {
+                roles.put(createSystemTablesConnectorId(connectorId).getCatalogName(), role);
+            }
+        }
+
         return new Session(
                 queryId,
                 Optional.of(transactionId),
                 clientTransactionSupport,
-                identity,
+                new Identity(identity.getUser(), identity.getPrincipal(), roles.build(), identity.getExtraCredentials()),
                 source,
                 catalog,
                 schema,
@@ -344,16 +374,69 @@ public final class Session
                 preparedStatements);
     }
 
+    public Session withDefaultProperties(Map<String, String> systemPropertyDefaults, Map<String, Map<String, String>> catalogPropertyDefaults)
+    {
+        requireNonNull(systemPropertyDefaults, "systemPropertyDefaults is null");
+        requireNonNull(catalogPropertyDefaults, "catalogPropertyDefaults is null");
+
+        // to remove this check properties must be authenticated and validated as in beginTransactionId
+        checkState(
+                !this.transactionId.isPresent() && this.connectorProperties.isEmpty(),
+                "Session properties cannot be overridden once a transaction is active");
+
+        Map<String, String> systemProperties = new HashMap<>();
+        systemProperties.putAll(systemPropertyDefaults);
+        systemProperties.putAll(this.systemProperties);
+
+        Map<String, Map<String, String>> connectorProperties = catalogPropertyDefaults.entrySet().stream()
+                .map(entry -> Maps.immutableEntry(entry.getKey(), new HashMap<>(entry.getValue())))
+                .collect(Collectors.toMap(Entry::getKey, Entry::getValue));
+        for (Entry<String, Map<String, String>> catalogProperties : this.unprocessedCatalogProperties.entrySet()) {
+            String catalog = catalogProperties.getKey();
+            for (Entry<String, String> entry : catalogProperties.getValue().entrySet()) {
+                connectorProperties.computeIfAbsent(catalog, id -> new HashMap<>())
+                        .put(entry.getKey(), entry.getValue());
+            }
+        }
+
+        return new Session(
+                queryId,
+                transactionId,
+                clientTransactionSupport,
+                identity,
+                source,
+                catalog,
+                schema,
+                path,
+                traceToken,
+                timeZoneKey,
+                locale,
+                remoteUserAddress,
+                userAgent,
+                clientInfo,
+                clientTags,
+                clientCapabilities,
+                resourceEstimates,
+                startTime,
+                systemProperties,
+                ImmutableMap.of(),
+                connectorProperties,
+                sessionPropertyManager,
+                preparedStatements);
+    }
+
     public ConnectorSession toConnectorSession()
     {
-        return new FullConnectorSession(this);
+        return new FullConnectorSession(this, identity.toConnectorIdentity());
     }
 
     public ConnectorSession toConnectorSession(ConnectorId connectorId)
     {
         requireNonNull(connectorId, "connectorId is null");
+
         return new FullConnectorSession(
                 this,
+                identity.toConnectorIdentity(connectorId.getCatalogName()),
                 connectorProperties.getOrDefault(connectorId, ImmutableMap.of()),
                 connectorId,
                 connectorId.getCatalogName(),
@@ -384,6 +467,8 @@ public final class Session
                 startTime,
                 systemProperties,
                 connectorProperties,
+                unprocessedCatalogProperties,
+                identity.getRoles(),
                 preparedStatements);
     }
 
@@ -476,7 +561,7 @@ public final class Session
             this.clientTags = ImmutableSet.copyOf(session.clientTags);
             this.startTime = session.startTime;
             this.systemProperties.putAll(session.systemProperties);
-            this.catalogSessionProperties.putAll(session.unprocessedCatalogProperties);
+            session.unprocessedCatalogProperties.forEach((key, value) -> this.catalogSessionProperties.put(key, new HashMap<>(value)));
             this.preparedStatements.putAll(session.preparedStatements);
         }
 

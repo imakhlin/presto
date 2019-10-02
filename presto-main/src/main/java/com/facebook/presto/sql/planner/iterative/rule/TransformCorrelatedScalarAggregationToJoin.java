@@ -15,14 +15,14 @@ package com.facebook.presto.sql.planner.iterative.rule;
 
 import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
+import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.sql.planner.iterative.Lookup;
 import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.planner.optimizations.ScalarAggregationToJoinRewriter;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 
 import java.util.Optional;
@@ -75,11 +75,11 @@ public class TransformCorrelatedScalarAggregationToJoin
         return PATTERN;
     }
 
-    private final FunctionRegistry functionRegistry;
+    private final FunctionManager functionManager;
 
-    public TransformCorrelatedScalarAggregationToJoin(FunctionRegistry functionRegistry)
+    public TransformCorrelatedScalarAggregationToJoin(FunctionManager functionManager)
     {
-        this.functionRegistry = requireNonNull(functionRegistry, "functionRegistry is null");
+        this.functionManager = requireNonNull(functionManager, "functionManager is null");
     }
 
     @Override
@@ -96,7 +96,7 @@ public class TransformCorrelatedScalarAggregationToJoin
             return Result.empty();
         }
 
-        ScalarAggregationToJoinRewriter rewriter = new ScalarAggregationToJoinRewriter(functionRegistry, context.getSymbolAllocator(), context.getIdAllocator(), context.getLookup());
+        ScalarAggregationToJoinRewriter rewriter = new ScalarAggregationToJoinRewriter(functionManager, context.getVariableAllocator(), context.getIdAllocator(), context.getLookup());
 
         PlanNode rewrittenNode = rewriter.rewriteScalarAggregation(lateralJoinNode, aggregation.get());
 

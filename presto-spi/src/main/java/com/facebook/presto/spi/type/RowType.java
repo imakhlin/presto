@@ -45,8 +45,8 @@ public class RowType
 
         this.fields = fields;
         this.fieldTypes = fields.stream()
-            .map(Field::getType)
-            .collect(Collectors.toList());
+                .map(Field::getType)
+                .collect(Collectors.toList());
     }
 
     public static RowType from(List<Field> fields)
@@ -60,6 +60,15 @@ public class RowType
                 .map(type -> new Field(Optional.empty(), type))
                 .collect(Collectors.toList());
 
+        return new RowType(makeSignature(fields), fields);
+    }
+
+    public static RowType withDefaultFieldNames(List<Type> types)
+    {
+        List<Field> fields = new ArrayList<>();
+        for (int i = 0; i < types.size(); i++) {
+            fields.add(new Field(Optional.of("field" + i), types.get(i)));
+        }
         return new RowType(makeSignature(fields), fields);
     }
 
@@ -158,6 +167,12 @@ public class RowType
     public Block getObject(Block block, int position)
     {
         return block.getObject(position, Block.class);
+    }
+
+    @Override
+    public Block getBlockUnchecked(Block block, int internalPosition)
+    {
+        return block.getBlockUnchecked(internalPosition);
     }
 
     @Override

@@ -14,6 +14,7 @@
 package com.facebook.presto.hive;
 
 import com.facebook.presto.hive.HdfsEnvironment.HdfsContext;
+import com.google.common.collect.ImmutableSet;
 import org.apache.hadoop.conf.Configuration;
 
 import javax.crypto.Cipher;
@@ -24,6 +25,7 @@ import javax.crypto.spec.SecretKeySpec;
 import javax.inject.Inject;
 
 import java.net.URI;
+import java.util.Set;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.Principal;
@@ -35,23 +37,13 @@ import java.util.NoSuchElementException;
 import java.util.Optional;
 
 import static com.facebook.presto.hive.util.ConfigurationUtils.copy;
+import static com.facebook.presto.hive.util.ConfigurationUtils.getInitialConfiguration;
 import static java.util.Objects.requireNonNull;
 
 public class HiveHdfsConfiguration
         implements HdfsConfiguration
 {
-    private static final Configuration INITIAL_CONFIGURATION;
-
-    static {
-        Configuration.addDefaultResource("hdfs-default.xml");
-        Configuration.addDefaultResource("hdfs-site.xml");
-
-        // must not be transitively reloaded during the future loading of various Hadoop modules
-        // all the required default resources must be declared above
-        INITIAL_CONFIGURATION = new Configuration(false);
-        Configuration defaultConfiguration = new Configuration();
-        copy(defaultConfiguration, INITIAL_CONFIGURATION);
-    }
+    private static final Configuration INITIAL_CONFIGURATION = getInitialConfiguration();
 
     @SuppressWarnings("ThreadLocalNotStaticFinal")
     private final ThreadLocal<Configuration> hadoopConfiguration = new ThreadLocal<Configuration>()
@@ -61,17 +53,19 @@ public class HiveHdfsConfiguration
         {
             Configuration configuration = new Configuration(false);
             copy(INITIAL_CONFIGURATION, configuration);
-            updater.updateConfiguration(configuration);
+            initializer.updateConfiguration(configuration);
             return configuration;
         }
     };
 
-    private final HdfsConfigurationUpdater updater;
+    private final HdfsConfigurationInitializer initializer;
+    private final Set<DynamicConfigurationProvider> dynamicProviders;
 
     @Inject
-    public HiveHdfsConfiguration(HdfsConfigurationUpdater updater)
+    public HiveHdfsConfiguration(HdfsConfigurationInitializer initializer, Set<DynamicConfigurationProvider> dynamicProviders)
     {
-        this.updater = requireNonNull(updater, "updater is null");
+        this.initializer = requireNonNull(initializer, "initializer is null");
+        this.dynamicProviders = ImmutableSet.copyOf(requireNonNull(dynamicProviders, "dynamicProviders is null"));
     }
 
     @Override
@@ -236,5 +230,6 @@ public class HiveHdfsConfiguration
                 return cipher;
             }
         }
+        return config;
     }
 }

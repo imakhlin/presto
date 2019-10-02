@@ -18,10 +18,10 @@ import com.facebook.presto.operator.aggregation.AccumulatorFactory;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.gen.JoinCompiler;
 import com.facebook.presto.sql.planner.plan.AggregationNode.Step;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
 
@@ -102,7 +102,7 @@ public class StreamingAggregationOperator
     public StreamingAggregationOperator(OperatorContext operatorContext, List<Type> sourceTypes, List<Type> groupByTypes, List<Integer> groupByChannels, Step step, List<AccumulatorFactory> accumulatorFactories, JoinCompiler joinCompiler)
     {
         this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
-        this.systemMemoryContext = operatorContext.newLocalSystemMemoryContext();
+        this.systemMemoryContext = operatorContext.newLocalSystemMemoryContext(StreamingAggregationOperator.class.getSimpleName());
         this.userMemoryContext = operatorContext.localUserMemoryContext();
         this.groupByTypes = ImmutableList.copyOf(requireNonNull(groupByTypes, "groupByTypes is null"));
         this.groupByChannels = Ints.toArray(requireNonNull(groupByChannels, "groupByChannels is null"));

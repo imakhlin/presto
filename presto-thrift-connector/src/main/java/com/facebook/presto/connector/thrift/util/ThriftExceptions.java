@@ -13,12 +13,12 @@
  */
 package com.facebook.presto.connector.thrift.util;
 
+import com.facebook.drift.TApplicationException;
+import com.facebook.drift.TException;
+import com.facebook.drift.protocol.TTransportException;
 import com.facebook.presto.connector.thrift.api.PrestoThriftServiceException;
 import com.facebook.presto.spi.PrestoException;
 import com.google.common.util.concurrent.ListenableFuture;
-import io.airlift.drift.TApplicationException;
-import io.airlift.drift.TException;
-import io.airlift.drift.protocol.TTransportException;
 
 import static com.facebook.presto.connector.thrift.ThriftErrorCode.THRIFT_SERVICE_CONNECTION_ERROR;
 import static com.facebook.presto.connector.thrift.ThriftErrorCode.THRIFT_SERVICE_GENERIC_REMOTE_ERROR;
@@ -26,6 +26,7 @@ import static com.facebook.presto.connector.thrift.ThriftErrorCode.THRIFT_SERVIC
 import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.google.common.util.concurrent.Futures.catchingAsync;
 import static com.google.common.util.concurrent.Futures.immediateFailedFuture;
+import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 
 public final class ThriftExceptions
 {
@@ -37,7 +38,7 @@ public final class ThriftExceptions
             throw new PrestoException(THRIFT_SERVICE_NO_AVAILABLE_HOSTS, e);
         }
         if ((e instanceof TApplicationException) || (e instanceof PrestoThriftServiceException)) {
-            return new PrestoException(THRIFT_SERVICE_GENERIC_REMOTE_ERROR, "Exception raised by remote Thrift server", e);
+            return new PrestoException(THRIFT_SERVICE_GENERIC_REMOTE_ERROR, "Exception raised by remote Thrift server: " + e.getMessage(), e);
         }
         if (e instanceof TException) {
             return new PrestoException(THRIFT_SERVICE_CONNECTION_ERROR, "Error communicating with remote Thrift server", e);
@@ -47,6 +48,6 @@ public final class ThriftExceptions
 
     public static <T> ListenableFuture<T> catchingThriftException(ListenableFuture<T> future)
     {
-        return catchingAsync(future, Exception.class, e -> immediateFailedFuture(toPrestoException(e)));
+        return catchingAsync(future, Exception.class, e -> immediateFailedFuture(toPrestoException(e)), directExecutor());
     }
 }

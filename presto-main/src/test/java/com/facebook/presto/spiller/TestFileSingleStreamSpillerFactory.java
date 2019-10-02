@@ -83,7 +83,9 @@ public class TestFileSingleStreamSpillerFactory
                 blockEncodingSerde,
                 new SpillerStats(),
                 spillPaths,
-                1.0);
+                1.0,
+                false,
+                false);
 
         assertEquals(listFiles(spillPath1.toPath()).size(), 0);
         assertEquals(listFiles(spillPath2.toPath()).size(), 0);
@@ -91,7 +93,7 @@ public class TestFileSingleStreamSpillerFactory
         Page page = buildPage();
         List<SingleStreamSpiller> spillers = new ArrayList<>();
         for (int i = 0; i < 10; ++i) {
-            SingleStreamSpiller singleStreamSpiller = spillerFactory.create(types, bytes -> {}, newSimpleAggregatedMemoryContext().newLocalMemoryContext());
+            SingleStreamSpiller singleStreamSpiller = spillerFactory.create(types, bytes -> {}, newSimpleAggregatedMemoryContext().newLocalMemoryContext("test"));
             getUnchecked(singleStreamSpiller.spill(page));
             spillers.add(singleStreamSpiller);
         }
@@ -121,9 +123,11 @@ public class TestFileSingleStreamSpillerFactory
                 blockEncodingSerde,
                 new SpillerStats(),
                 spillPaths,
-                0.0);
+                0.0,
+                false,
+                false);
 
-        spillerFactory.create(types, bytes -> {}, newSimpleAggregatedMemoryContext().newLocalMemoryContext());
+        spillerFactory.create(types, bytes -> {}, newSimpleAggregatedMemoryContext().newLocalMemoryContext("test"));
     }
 
     @Test(expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = "No spill paths configured")
@@ -136,8 +140,10 @@ public class TestFileSingleStreamSpillerFactory
                 new BlockEncodingManager(new TypeRegistry()),
                 new SpillerStats(),
                 spillPaths,
-                1.0);
-        spillerFactory.create(types, bytes -> {}, newSimpleAggregatedMemoryContext().newLocalMemoryContext());
+                1.0,
+                false,
+                false);
+        spillerFactory.create(types, bytes -> {}, newSimpleAggregatedMemoryContext().newLocalMemoryContext("test"));
     }
 
     @Test
@@ -164,7 +170,9 @@ public class TestFileSingleStreamSpillerFactory
                 blockEncodingSerde,
                 new SpillerStats(),
                 spillPaths,
-                1.0);
+                1.0,
+                false,
+                false);
         spillerFactory.cleanupOldSpillFiles();
 
         assertEquals(listFiles(spillPath1.toPath()).size(), 1);

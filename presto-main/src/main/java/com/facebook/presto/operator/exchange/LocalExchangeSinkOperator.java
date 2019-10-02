@@ -23,7 +23,7 @@ import com.facebook.presto.operator.exchange.LocalExchange.LocalExchangeFactory;
 import com.facebook.presto.operator.exchange.LocalExchange.LocalExchangeSinkFactory;
 import com.facebook.presto.operator.exchange.LocalExchange.LocalExchangeSinkFactoryId;
 import com.facebook.presto.spi.Page;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.util.function.Function;
@@ -143,7 +143,7 @@ public class LocalExchangeSinkOperator
         requireNonNull(page, "page is null");
         page = pagePreprocessor.apply(page);
         sink.addPage(page);
-        operatorContext.recordGeneratedOutput(page.getSizeInBytes(), page.getPositionCount());
+        operatorContext.recordOutput(page.getSizeInBytes(), page.getPositionCount());
     }
 
     @Override

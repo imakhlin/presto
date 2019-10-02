@@ -13,7 +13,6 @@
  */
 package com.facebook.presto.transaction;
 
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.connector.informationSchema.InformationSchemaConnector;
 import com.facebook.presto.connector.system.SystemConnector;
 import com.facebook.presto.metadata.Catalog;
@@ -22,6 +21,7 @@ import com.facebook.presto.metadata.InMemoryNodeManager;
 import com.facebook.presto.metadata.InternalNodeManager;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.security.AllowAllAccessControl;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.connector.Connector;
 import com.facebook.presto.spi.connector.ConnectorMetadata;
@@ -39,8 +39,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
-import static com.facebook.presto.connector.ConnectorId.createInformationSchemaConnectorId;
-import static com.facebook.presto.connector.ConnectorId.createSystemTablesConnectorId;
+import static com.facebook.presto.spi.ConnectorId.createInformationSchemaConnectorId;
+import static com.facebook.presto.spi.ConnectorId.createSystemTablesConnectorId;
 import static com.facebook.presto.spi.StandardErrorCode.TRANSACTION_ALREADY_ABORTED;
 import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
@@ -70,7 +70,7 @@ public class TestTransactionManager
     {
         try (IdleCheckExecutor executor = new IdleCheckExecutor()) {
             CatalogManager catalogManager = new CatalogManager();
-            TransactionManager transactionManager = TransactionManager.create(new TransactionManagerConfig(), executor.getExecutor(), catalogManager, finishingExecutor);
+            TransactionManager transactionManager = InMemoryTransactionManager.create(new TransactionManagerConfig(), executor.getExecutor(), catalogManager, finishingExecutor);
 
             Connector c1 = new TpchConnectorFactory().create(CATALOG_NAME, ImmutableMap.of(), new TestingConnectorContext());
             registerConnector(catalogManager, transactionManager, CATALOG_NAME, CONNECTOR_ID, c1);
@@ -100,7 +100,7 @@ public class TestTransactionManager
     {
         try (IdleCheckExecutor executor = new IdleCheckExecutor()) {
             CatalogManager catalogManager = new CatalogManager();
-            TransactionManager transactionManager = TransactionManager.create(new TransactionManagerConfig(), executor.getExecutor(), catalogManager, finishingExecutor);
+            TransactionManager transactionManager = InMemoryTransactionManager.create(new TransactionManagerConfig(), executor.getExecutor(), catalogManager, finishingExecutor);
 
             Connector c1 = new TpchConnectorFactory().create(CATALOG_NAME, ImmutableMap.of(), new TestingConnectorContext());
             registerConnector(catalogManager, transactionManager, CATALOG_NAME, CONNECTOR_ID, c1);
@@ -130,7 +130,7 @@ public class TestTransactionManager
     {
         try (IdleCheckExecutor executor = new IdleCheckExecutor()) {
             CatalogManager catalogManager = new CatalogManager();
-            TransactionManager transactionManager = TransactionManager.create(new TransactionManagerConfig(), executor.getExecutor(), catalogManager, finishingExecutor);
+            TransactionManager transactionManager = InMemoryTransactionManager.create(new TransactionManagerConfig(), executor.getExecutor(), catalogManager, finishingExecutor);
 
             Connector c1 = new TpchConnectorFactory().create(CATALOG_NAME, ImmutableMap.of(), new TestingConnectorContext());
             registerConnector(catalogManager, transactionManager, CATALOG_NAME, CONNECTOR_ID, c1);
@@ -172,7 +172,7 @@ public class TestTransactionManager
             throws Exception
     {
         try (IdleCheckExecutor executor = new IdleCheckExecutor()) {
-            TransactionManager transactionManager = TransactionManager.create(
+            TransactionManager transactionManager = InMemoryTransactionManager.create(
                     new TransactionManagerConfig()
                             .setIdleTimeout(new Duration(1, TimeUnit.MILLISECONDS))
                             .setIdleCheckInterval(new Duration(5, TimeUnit.MILLISECONDS)),
@@ -211,7 +211,7 @@ public class TestTransactionManager
                 connectorId,
                 connector,
                 createInformationSchemaConnectorId(connectorId),
-                new InformationSchemaConnector(catalogName, nodeManager, metadata, new AllowAllAccessControl()),
+                new InformationSchemaConnector(catalogName, nodeManager, metadata, new AllowAllAccessControl(), ImmutableList.of()),
                 systemId,
                 new SystemConnector(
                         systemId,

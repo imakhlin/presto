@@ -17,10 +17,12 @@ import com.facebook.presto.hive.HdfsEnvironment.HdfsContext;
 import com.facebook.presto.hive.RecordFileWriter.ExtendedRecordWriter;
 import com.facebook.presto.hive.metastore.Database;
 import com.facebook.presto.hive.metastore.Partition;
+import com.facebook.presto.hive.metastore.PrestoTableType;
 import com.facebook.presto.hive.metastore.SemiTransactionalHiveMetastore;
 import com.facebook.presto.hive.metastore.Storage;
 import com.facebook.presto.hive.metastore.Table;
 import com.facebook.presto.hive.s3.PrestoS3FileSystem;
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaNotFoundException;
@@ -60,6 +62,7 @@ import org.apache.hadoop.hive.ql.exec.FileSinkOperator.RecordWriter;
 import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
 import org.apache.hadoop.hive.ql.io.RCFile;
 import org.apache.hadoop.hive.ql.io.RCFileOutputFormat;
+import org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat;
 import org.apache.hadoop.hive.serde2.SerDeException;
 import org.apache.hadoop.hive.serde2.Serializer;
 import org.apache.hadoop.hive.serde2.io.DateWritable;
@@ -112,12 +115,16 @@ import static com.facebook.presto.hive.HiveErrorCode.HIVE_INVALID_PARTITION_VALU
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_SERDE_NOT_FOUND;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_WRITER_DATA_ERROR;
 import static com.facebook.presto.hive.HivePartitionKey.HIVE_DEFAULT_DYNAMIC_PARTITION;
+import static com.facebook.presto.hive.HiveSessionProperties.getTemporaryStagingDirectoryPath;
 import static com.facebook.presto.hive.HiveUtil.checkCondition;
 import static com.facebook.presto.hive.HiveUtil.isArrayType;
 import static com.facebook.presto.hive.HiveUtil.isMapType;
 import static com.facebook.presto.hive.HiveUtil.isRowType;
+import static com.facebook.presto.hive.ParquetRecordWriterUtil.createParquetWriter;
 import static com.facebook.presto.hive.metastore.MetastoreUtil.getProtectMode;
 import static com.facebook.presto.hive.metastore.MetastoreUtil.verifyOnline;
+import static com.facebook.presto.hive.metastore.PrestoTableType.MANAGED_TABLE;
+import static com.facebook.presto.hive.metastore.PrestoTableType.TEMPORARY_TABLE;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.type.Chars.isCharType;
 import static com.google.common.base.Strings.padEnd;
@@ -130,7 +137,6 @@ import static java.util.Objects.requireNonNull;
 import static java.util.UUID.randomUUID;
 import static java.util.stream.Collectors.toList;
 import static org.apache.hadoop.hive.conf.HiveConf.ConfVars.COMPRESSRESULT;
-import static org.apache.hadoop.hive.metastore.TableType.MANAGED_TABLE;
 import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.META_TABLE_COLUMNS;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.getPrimitiveJavaObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.getPrimitiveWritableObjectInspector;
@@ -170,12 +176,15 @@ public final class HiveWriteUtils
     {
     }
 
-    public static RecordWriter createRecordWriter(Path target, JobConf conf, Properties properties, String outputFormatName)
+    public static RecordWriter createRecordWriter(Path target, JobConf conf, Properties properties, String outputFormatName, ConnectorSession session)
     {
         try {
             boolean compress = HiveConf.getBoolVar(conf, COMPRESSRESULT);
             if (outputFormatName.equals(RCFileOutputFormat.class.getName())) {
                 return createRcFileWriter(target, conf, properties, compress);
+            }
+            if (outputFormatName.equals(MapredParquetOutputFormat.class.getName())) {
+                return createParquetWriter(target, conf, properties, compress, session);
             }
             Object writer = Class.forName(outputFormatName).getConstructor().newInstance();
             return ((HiveOutputFormat<?, ?>) writer).getHiveRecordWriter(conf, target, Text.class, compress, properties, Reporter.NULL);
@@ -420,7 +429,10 @@ public final class HiveWriteUtils
 
     public static void checkTableIsWritable(Table table, boolean writesToNonManagedTablesEnabled)
     {
-        if (!writesToNonManagedTablesEnabled && !table.getTableType().equals(MANAGED_TABLE.toString())) {
+        PrestoTableType tableType = table.getTableType();
+        if (!writesToNonManagedTablesEnabled
+                && !tableType.equals(MANAGED_TABLE)
+                && !tableType.equals(TEMPORARY_TABLE)) {
             throw new PrestoException(NOT_SUPPORTED, "Cannot write to non-managed Hive table");
         }
 
@@ -541,10 +553,11 @@ public final class HiveWriteUtils
         }
     }
 
-    public static Path createTemporaryPath(HdfsContext context, HdfsEnvironment hdfsEnvironment, Path targetPath)
+    public static Path createTemporaryPath(ConnectorSession session, HdfsContext context, HdfsEnvironment hdfsEnvironment, Path targetPath)
     {
         // use a per-user temporary directory to avoid permission problems
-        String temporaryPrefix = "/tmp/presto-" + context.getIdentity().getUser();
+        String temporaryPrefix = getTemporaryStagingDirectoryPath(session)
+                .replace("${USER}", context.getIdentity().getUser());
 
         // use relative temporary directory on ViewFS
         if (isViewFileSystem(context, hdfsEnvironment, targetPath)) {

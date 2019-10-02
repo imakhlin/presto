@@ -13,39 +13,51 @@
  */
 package com.facebook.presto.operator.scalar;
 
+import com.facebook.presto.bytecode.BytecodeBlock;
+import com.facebook.presto.bytecode.ClassDefinition;
+import com.facebook.presto.bytecode.DynamicClassLoader;
+import com.facebook.presto.bytecode.MethodDefinition;
+import com.facebook.presto.bytecode.Parameter;
+import com.facebook.presto.bytecode.Scope;
+import com.facebook.presto.bytecode.Variable;
+import com.facebook.presto.bytecode.control.IfStatement;
+import com.facebook.presto.bytecode.expression.BytecodeExpression;
 import com.facebook.presto.metadata.BoundVariables;
-import com.facebook.presto.metadata.FunctionKind;
-import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
+import com.facebook.presto.spi.function.FunctionKind;
+import com.facebook.presto.spi.function.Signature;
+import com.facebook.presto.spi.relation.FullyQualifiedName;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.sql.gen.CallSiteBinder;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Primitives;
-import io.airlift.bytecode.BytecodeBlock;
-import io.airlift.bytecode.ClassDefinition;
-import io.airlift.bytecode.DynamicClassLoader;
-import io.airlift.bytecode.MethodDefinition;
-import io.airlift.bytecode.Parameter;
-import io.airlift.bytecode.Scope;
-import io.airlift.bytecode.Variable;
-import io.airlift.bytecode.control.IfStatement;
-import io.airlift.bytecode.expression.BytecodeExpression;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 
-import static com.facebook.presto.metadata.Signature.typeVariable;
+import static com.facebook.presto.bytecode.Access.FINAL;
+import static com.facebook.presto.bytecode.Access.PRIVATE;
+import static com.facebook.presto.bytecode.Access.PUBLIC;
+import static com.facebook.presto.bytecode.Access.STATIC;
+import static com.facebook.presto.bytecode.Access.a;
+import static com.facebook.presto.bytecode.Parameter.arg;
+import static com.facebook.presto.bytecode.ParameterizedType.type;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantInt;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantNull;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.equal;
+import static com.facebook.presto.metadata.BuiltInFunctionNamespaceManager.DEFAULT_NAMESPACE;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.USE_BOXED_TYPE;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
+import static com.facebook.presto.spi.function.Signature.typeVariable;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.sql.gen.SqlTypeBytecodeExpression.constantType;
 import static com.facebook.presto.util.CompilerUtils.defineClass;
@@ -53,16 +65,6 @@ import static com.facebook.presto.util.CompilerUtils.makeClassName;
 import static com.facebook.presto.util.Failures.checkCondition;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static io.airlift.bytecode.Access.FINAL;
-import static io.airlift.bytecode.Access.PRIVATE;
-import static io.airlift.bytecode.Access.PUBLIC;
-import static io.airlift.bytecode.Access.STATIC;
-import static io.airlift.bytecode.Access.a;
-import static io.airlift.bytecode.Parameter.arg;
-import static io.airlift.bytecode.ParameterizedType.type;
-import static io.airlift.bytecode.expression.BytecodeExpressions.constantInt;
-import static io.airlift.bytecode.expression.BytecodeExpressions.constantNull;
-import static io.airlift.bytecode.expression.BytecodeExpressions.equal;
 import static java.lang.invoke.MethodHandles.lookup;
 import static java.util.Collections.nCopies;
 
@@ -73,7 +75,7 @@ public final class ArrayConstructor
 
     public ArrayConstructor()
     {
-        super(new Signature("array_constructor",
+        super(new Signature(FullyQualifiedName.of(DEFAULT_NAMESPACE, "array_constructor"),
                 FunctionKind.SCALAR,
                 ImmutableList.of(typeVariable("E")),
                 ImmutableList.of(),
@@ -95,6 +97,12 @@ public final class ArrayConstructor
     }
 
     @Override
+    public boolean isCalledOnNullInput()
+    {
+        return true;
+    }
+
+    @Override
     public String getDescription()
     {
         // Internal function, doesn't need a description
@@ -102,7 +110,7 @@ public final class ArrayConstructor
     }
 
     @Override
-    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
     {
         Map<String, Type> types = boundVariables.getTypeVariables();
         checkArgument(types.size() == 1, "Can only construct arrays from exactly matching types");
@@ -129,8 +137,7 @@ public final class ArrayConstructor
         return new ScalarFunctionImplementation(
                 false,
                 nCopies(stackTypes.size(), valueTypeArgumentProperty(USE_BOXED_TYPE)),
-                methodHandle,
-                isDeterministic());
+                methodHandle);
     }
 
     private static Class<?> generateArrayConstructor(List<Class<?>> stackTypes, Type elementType)
@@ -167,17 +174,12 @@ public final class ArrayConstructor
         body.append(createBlockBuilder);
 
         for (int i = 0; i < stackTypes.size(); i++) {
-            if (elementType.getJavaType() == void.class) {
-                body.append(blockBuilderVariable.invoke("appendNull", BlockBuilder.class));
-            }
-            else {
-                Variable argument = scope.getVariable("arg" + i);
-                IfStatement ifStatement = new IfStatement()
-                        .condition(equal(argument, constantNull(stackTypes.get(i))))
-                        .ifTrue(blockBuilderVariable.invoke("appendNull", BlockBuilder.class).pop())
-                        .ifFalse(constantType(binder, elementType).writeValue(blockBuilderVariable, argument.cast(elementType.getJavaType())));
-                body.append(ifStatement);
-            }
+            Variable argument = scope.getVariable("arg" + i);
+            IfStatement ifStatement = new IfStatement()
+                    .condition(equal(argument, constantNull(stackTypes.get(i))))
+                    .ifTrue(blockBuilderVariable.invoke("appendNull", BlockBuilder.class).pop())
+                    .ifFalse(constantType(binder, elementType).writeValue(blockBuilderVariable, argument.cast(elementType.getJavaType())));
+            body.append(ifStatement);
         }
 
         body.append(blockBuilderVariable.invoke("build", Block.class).ret());

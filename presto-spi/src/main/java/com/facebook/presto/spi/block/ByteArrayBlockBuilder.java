@@ -23,6 +23,8 @@ import java.util.function.BiConsumer;
 import static com.facebook.presto.spi.block.BlockUtil.calculateBlockResetSize;
 import static com.facebook.presto.spi.block.BlockUtil.checkArrayRange;
 import static com.facebook.presto.spi.block.BlockUtil.checkValidRegion;
+import static com.facebook.presto.spi.block.BlockUtil.countUsedPositions;
+import static com.facebook.presto.spi.block.BlockUtil.internalPositionInRange;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static java.lang.Math.max;
 
@@ -147,9 +149,21 @@ public class ByteArrayBlockBuilder
     }
 
     @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
+    {
+        return (Byte.BYTES + Byte.BYTES) * (long) countUsedPositions(positions);
+    }
+
+    @Override
     public long getRetainedSizeInBytes()
     {
         return retainedSizeInBytes;
+    }
+
+    @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        return isNull(position) ? 0 : Byte.BYTES;
     }
 
     @Override
@@ -167,12 +181,9 @@ public class ByteArrayBlockBuilder
     }
 
     @Override
-    public byte getByte(int position, int offset)
+    public byte getByte(int position)
     {
         checkReadablePosition(position);
-        if (offset != 0) {
-            throw new IllegalArgumentException("offset must be zero");
-        }
         return values[position];
     }
 
@@ -279,5 +290,26 @@ public class ByteArrayBlockBuilder
         if (position < 0 || position >= getPositionCount()) {
             throw new IllegalArgumentException("position is not valid");
         }
+    }
+
+    @Override
+    public boolean isNullUnchecked(int internalPosition)
+    {
+        assert mayHaveNull() : "no nulls present";
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return valueIsNull[internalPosition];
+    }
+
+    @Override
+    public byte getByteUnchecked(int internalPosition)
+    {
+        assert internalPositionInRange(internalPosition, getOffsetBase(), getPositionCount());
+        return values[internalPosition];
+    }
+
+    @Override
+    public int getOffsetBase()
+    {
+        return 0;
     }
 }

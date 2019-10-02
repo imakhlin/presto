@@ -50,24 +50,31 @@ public class LazyBlock
     }
 
     @Override
-    public byte getByte(int position, int offset)
+    public byte getByte(int position)
     {
         assureLoaded();
-        return block.getByte(position, offset);
+        return block.getByte(position);
     }
 
     @Override
-    public short getShort(int position, int offset)
+    public short getShort(int position)
     {
         assureLoaded();
-        return block.getShort(position, offset);
+        return block.getShort(position);
     }
 
     @Override
-    public int getInt(int position, int offset)
+    public int getInt(int position)
     {
         assureLoaded();
-        return block.getInt(position, offset);
+        return block.getInt(position);
+    }
+
+    @Override
+    public long getLong(int position)
+    {
+        assureLoaded();
+        return block.getLong(position);
     }
 
     @Override
@@ -178,10 +185,24 @@ public class LazyBlock
     }
 
     @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
+    {
+        assureLoaded();
+        return block.getPositionsSizeInBytes(positions);
+    }
+
+    @Override
     public long getRetainedSizeInBytes()
     {
         assureLoaded();
         return INSTANCE_SIZE + block.getRetainedSizeInBytes();
+    }
+
+    @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        assureLoaded();
+        return block.getEstimatedDataSizeForStats(position);
     }
 
     @Override
@@ -267,5 +288,74 @@ public class LazyBlock
 
         // clear reference to loader to free resources, since load was successful
         loader = null;
+    }
+
+    @Override
+    public byte getByteUnchecked(int internalPosition)
+    {
+        assert block != null : "block is not loaded";
+        return block.getByte(internalPosition);
+    }
+
+    @Override
+    public short getShortUnchecked(int internalPosition)
+    {
+        assert block != null : "block is not loaded";
+        return block.getShort(internalPosition);
+    }
+
+    @Override
+    public int getIntUnchecked(int internalPosition)
+    {
+        assert block != null : "block is not loaded";
+        return block.getInt(internalPosition);
+    }
+
+    @Override
+    public long getLongUnchecked(int internalPosition)
+    {
+        assert block != null : "block is not loaded";
+        return block.getLong(internalPosition);
+    }
+
+    @Override
+    public long getLongUnchecked(int internalPosition, int offset)
+    {
+        assert block != null : "block is not loaded";
+        return block.getLong(internalPosition, offset);
+    }
+
+    @Override
+    public Slice getSliceUnchecked(int internalPosition, int offset, int length)
+    {
+        assert block != null : "block is not loaded";
+        return block.getSlice(internalPosition, offset, length);
+    }
+
+    @Override
+    public int getSliceLengthUnchecked(int internalPosition)
+    {
+        assert block != null : "block is not loaded";
+        return block.getSliceLength(internalPosition);
+    }
+
+    @Override
+    public Block getBlockUnchecked(int internalPosition)
+    {
+        assert block != null : "block is not loaded";
+        return block.getObject(internalPosition, Block.class);
+    }
+
+    @Override
+    public int getOffsetBase()
+    {
+        return 0;
+    }
+
+    @Override
+    public boolean isNullUnchecked(int internalPosition)
+    {
+        assert block != null : "block is not loaded";
+        return block.isNull(internalPosition);
     }
 }

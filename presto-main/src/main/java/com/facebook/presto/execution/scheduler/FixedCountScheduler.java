@@ -15,12 +15,13 @@ package com.facebook.presto.execution.scheduler;
 
 import com.facebook.presto.execution.RemoteTask;
 import com.facebook.presto.execution.SqlStageExecution;
-import com.facebook.presto.spi.Node;
+import com.facebook.presto.metadata.InternalNode;
 import com.google.common.annotations.VisibleForTesting;
 
 import java.util.List;
-import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.stream.IntStream;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.util.Objects.requireNonNull;
@@ -30,13 +31,13 @@ public class FixedCountScheduler
 {
     public interface TaskScheduler
     {
-        RemoteTask scheduleTask(Node node, int partition, OptionalInt totalPartitions);
+        Optional<RemoteTask> scheduleTask(InternalNode node, int partition, OptionalInt totalPartitions);
     }
 
     private final TaskScheduler taskScheduler;
-    private final Map<Integer, Node> partitionToNode;
+    private final List<InternalNode> partitionToNode;
 
-    public FixedCountScheduler(SqlStageExecution stage, Map<Integer, Node> partitionToNode)
+    public FixedCountScheduler(SqlStageExecution stage, List<InternalNode> partitionToNode)
     {
         requireNonNull(stage, "stage is null");
         this.taskScheduler = stage::scheduleTask;
@@ -44,7 +45,7 @@ public class FixedCountScheduler
     }
 
     @VisibleForTesting
-    public FixedCountScheduler(TaskScheduler taskScheduler, Map<Integer, Node> partitionToNode)
+    public FixedCountScheduler(TaskScheduler taskScheduler, List<InternalNode> partitionToNode)
     {
         this.taskScheduler = requireNonNull(taskScheduler, "taskScheduler is null");
         this.partitionToNode = requireNonNull(partitionToNode, "partitionToNode is null");
@@ -54,10 +55,14 @@ public class FixedCountScheduler
     public ScheduleResult schedule()
     {
         OptionalInt totalPartitions = OptionalInt.of(partitionToNode.size());
-        List<RemoteTask> newTasks = partitionToNode.entrySet().stream()
-                .map(entry -> taskScheduler.scheduleTask(entry.getValue(), entry.getKey(), totalPartitions))
+        List<RemoteTask> newTasks = IntStream.range(0, partitionToNode.size())
+                .mapToObj(partition -> taskScheduler.scheduleTask(partitionToNode.get(partition), partition, totalPartitions))
+                .filter(Optional::isPresent)
+                .map(Optional::get)
                 .collect(toImmutableList());
 
-        return new ScheduleResult(true, newTasks, 0);
+        // no need to call stage.transitionToSchedulingSplits() since there is no table splits
+
+        return ScheduleResult.nonBlocked(true, newTasks, 0);
     }
 }

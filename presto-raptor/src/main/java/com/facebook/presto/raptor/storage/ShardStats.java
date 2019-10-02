@@ -13,9 +13,9 @@
  */
 package com.facebook.presto.raptor.storage;
 
+import com.facebook.presto.orc.OrcBatchRecordReader;
 import com.facebook.presto.orc.OrcPredicate;
 import com.facebook.presto.orc.OrcReader;
-import com.facebook.presto.orc.OrcRecordReader;
 import com.facebook.presto.raptor.metadata.ColumnStats;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
@@ -23,6 +23,7 @@ import com.facebook.presto.spi.type.BigintType;
 import com.facebook.presto.spi.type.BooleanType;
 import com.facebook.presto.spi.type.DateType;
 import com.facebook.presto.spi.type.DoubleType;
+import com.facebook.presto.spi.type.TimeType;
 import com.facebook.presto.spi.type.TimestampType;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.VarcharType;
@@ -34,6 +35,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
+import static com.facebook.presto.orc.OrcReader.INITIAL_BATCH_SIZE;
 import static com.facebook.presto.raptor.RaptorErrorCode.RAPTOR_ERROR;
 import static java.lang.Double.isInfinite;
 import static java.lang.Double.isNaN;
@@ -66,13 +68,14 @@ public final class ShardStats
             throws IOException
     {
         int columnIndex = columnIndex(orcReader.getColumnNames(), columnId);
-        OrcRecordReader reader = orcReader.createRecordReader(ImmutableMap.of(columnIndex, type), OrcPredicate.TRUE, UTC, newSimpleAggregatedMemoryContext());
+        OrcBatchRecordReader reader = orcReader.createBatchRecordReader(ImmutableMap.of(columnIndex, type), OrcPredicate.TRUE, UTC, newSimpleAggregatedMemoryContext(), INITIAL_BATCH_SIZE);
 
         if (type.equals(BooleanType.BOOLEAN)) {
             return indexBoolean(type, reader, columnIndex, columnId);
         }
         if (type.equals(BigintType.BIGINT) ||
                 type.equals(DateType.DATE) ||
+                type.equals(TimeType.TIME) ||
                 type.equals(TimestampType.TIMESTAMP)) {
             return indexLong(type, reader, columnIndex, columnId);
         }
@@ -94,7 +97,7 @@ public final class ShardStats
         return index;
     }
 
-    private static ColumnStats indexBoolean(Type type, OrcRecordReader reader, int columnIndex, long columnId)
+    private static ColumnStats indexBoolean(Type type, OrcBatchRecordReader reader, int columnIndex, long columnId)
             throws IOException
     {
         boolean minSet = false;
@@ -130,7 +133,7 @@ public final class ShardStats
                 maxSet ? max : null);
     }
 
-    private static ColumnStats indexLong(Type type, OrcRecordReader reader, int columnIndex, long columnId)
+    private static ColumnStats indexLong(Type type, OrcBatchRecordReader reader, int columnIndex, long columnId)
             throws IOException
     {
         boolean minSet = false;
@@ -166,7 +169,7 @@ public final class ShardStats
                 maxSet ? max : null);
     }
 
-    private static ColumnStats indexDouble(Type type, OrcRecordReader reader, int columnIndex, long columnId)
+    private static ColumnStats indexDouble(Type type, OrcBatchRecordReader reader, int columnIndex, long columnId)
             throws IOException
     {
         boolean minSet = false;
@@ -215,7 +218,7 @@ public final class ShardStats
                 maxSet ? max : null);
     }
 
-    private static ColumnStats indexString(Type type, OrcRecordReader reader, int columnIndex, long columnId)
+    private static ColumnStats indexString(Type type, OrcBatchRecordReader reader, int columnIndex, long columnId)
             throws IOException
     {
         boolean minSet = false;

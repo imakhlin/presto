@@ -15,6 +15,7 @@ package com.facebook.presto.cli;
 
 import com.facebook.presto.cli.ClientOptions.OutputFormat;
 import com.facebook.presto.client.ClientSession;
+import com.facebook.presto.spi.security.SelectedRole;
 import com.facebook.presto.sql.parser.StatementSplitter;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
@@ -52,7 +53,9 @@ import static com.facebook.presto.sql.parser.StatementSplitter.Statement;
 import static com.facebook.presto.sql.parser.StatementSplitter.isEmptyStatement;
 import static com.facebook.presto.sql.parser.StatementSplitter.squeezeStatement;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.io.ByteStreams.nullOutputStream;
+import static com.google.common.io.Files.createParentDirs;
 import static com.google.common.util.concurrent.Uninterruptibles.awaitUninterruptibly;
 import static java.lang.Integer.parseInt;
 import static java.lang.String.format;
@@ -82,8 +85,8 @@ public class Console
     public boolean run()
     {
         ClientSession session = clientOptions.toClientSession();
-        boolean hasQuery = !Strings.isNullOrEmpty(clientOptions.execute);
-        boolean isFromFile = !Strings.isNullOrEmpty(clientOptions.file);
+        boolean hasQuery = !isNullOrEmpty(clientOptions.execute);
+        boolean isFromFile = !isNullOrEmpty(clientOptions.file);
 
         if (!hasQuery && !isFromFile) {
             AnsiConsole.systemInstall();
@@ -101,7 +104,7 @@ public class Console
                 throw new RuntimeException("both --execute and --file specified");
             }
             try {
-                query = Files.toString(new File(clientOptions.file), UTF_8);
+                query = Files.asCharSource(new File(clientOptions.file), UTF_8).read();
                 hasQuery = true;
             }
             catch (IOException e) {
@@ -344,6 +347,13 @@ public class Console
                 builder = builder.withProperties(sessionProperties);
             }
 
+            // update session roles
+            if (!query.getSetRoles().isEmpty()) {
+                Map<String, SelectedRole> roles = new HashMap<>(session.getRoles());
+                roles.putAll(query.getSetRoles());
+                builder = builder.withRoles(roles);
+            }
+
             // update prepared statements if present
             if (!query.getAddedPreparedStatements().isEmpty() || !query.getDeallocatedPreparedStatements().isEmpty()) {
                 Map<String, String> preparedStatements = new HashMap<>(session.getPreparedStatements());
@@ -368,23 +378,26 @@ public class Console
 
     private static MemoryHistory getHistory()
     {
-        return getHistory(new File(getUserHome(), ".presto_history"));
+        String historyFilePath = System.getenv("PRESTO_HISTORY_FILE");
+        File historyFile;
+        if (isNullOrEmpty(historyFilePath)) {
+            historyFile = new File(getUserHome(), ".presto_history");
+        }
+        else {
+            historyFile = new File(historyFilePath);
+        }
+        return getHistory(historyFile);
     }
 
     @VisibleForTesting
     static MemoryHistory getHistory(File historyFile)
     {
-        if (!historyFile.canWrite() || !historyFile.canRead()) {
-            System.err.printf("WARNING: History file is not readable/writable: %s. " +
-                            "History will not be available during this session.%n",
-                    historyFile.getAbsolutePath());
-            MemoryHistory history = new MemoryHistory();
-            history.setAutoTrim(true);
-            return history;
-        }
-
         MemoryHistory history;
         try {
+            //  try creating the history file and its parents to check
+            // whether the directory tree is readable/writeable
+            createParentDirs(historyFile.getParentFile());
+            historyFile.createNewFile();
             history = new FileHistory(historyFile);
             history.setMaxSize(10000);
         }

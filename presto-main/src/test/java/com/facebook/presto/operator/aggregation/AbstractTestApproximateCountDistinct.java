@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.operator.aggregation;
 
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.Block;
@@ -46,7 +47,7 @@ public abstract class AbstractTestApproximateCountDistinct
 
     public abstract Object randomValue();
 
-    protected static final MetadataManager metadata = MetadataManager.createTestMetadataManager();
+    protected static final FunctionManager functionManager = MetadataManager.createTestMetadataManager().getFunctionManager();
 
     protected int getUniqueValuesCount()
     {
@@ -127,7 +128,7 @@ public abstract class AbstractTestApproximateCountDistinct
         }
     }
 
-    private void assertCount(List<Object> values, double maxStandardError, long expectedCount)
+    protected void assertCount(List<?> values, double maxStandardError, long expectedCount)
     {
         if (!values.isEmpty()) {
             assertEquals(estimateGroupByCount(values, maxStandardError), expectedCount);
@@ -136,25 +137,25 @@ public abstract class AbstractTestApproximateCountDistinct
         assertEquals(estimateCountPartial(values, maxStandardError), expectedCount);
     }
 
-    private long estimateGroupByCount(List<Object> values, double maxStandardError)
+    private long estimateGroupByCount(List<?> values, double maxStandardError)
     {
         Object result = AggregationTestUtils.groupedAggregation(getAggregationFunction(), createPage(values, maxStandardError));
         return (long) result;
     }
 
-    private long estimateCount(List<Object> values, double maxStandardError)
+    private long estimateCount(List<?> values, double maxStandardError)
     {
         Object result = AggregationTestUtils.aggregation(getAggregationFunction(), createPage(values, maxStandardError));
         return (long) result;
     }
 
-    private long estimateCountPartial(List<Object> values, double maxStandardError)
+    private long estimateCountPartial(List<?> values, double maxStandardError)
     {
         Object result = AggregationTestUtils.partialAggregation(getAggregationFunction(), createPage(values, maxStandardError));
         return (long) result;
     }
 
-    private Page createPage(List<Object> values, double maxStandardError)
+    private Page createPage(List<?> values, double maxStandardError)
     {
         if (values.isEmpty()) {
             return new Page(0);
@@ -169,7 +170,7 @@ public abstract class AbstractTestApproximateCountDistinct
     /**
      * Produce a block with the given values in the last field.
      */
-    private static Block createBlock(Type type, List<Object> values)
+    private static Block createBlock(Type type, List<?> values)
     {
         BlockBuilder blockBuilder = type.createBlockBuilder(null, values.size());
 

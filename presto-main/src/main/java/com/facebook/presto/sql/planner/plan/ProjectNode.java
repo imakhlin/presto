@@ -13,9 +13,9 @@
  */
 package com.facebook.presto.sql.planner.plan;
 
-import com.facebook.presto.sql.planner.Symbol;
-import com.facebook.presto.sql.tree.Expression;
-import com.facebook.presto.sql.tree.SymbolReference;
+import com.facebook.presto.spi.plan.PlanNode;
+import com.facebook.presto.spi.plan.PlanNodeId;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
@@ -24,13 +24,12 @@ import com.google.common.collect.Iterables;
 import javax.annotation.concurrent.Immutable;
 
 import java.util.List;
-import java.util.Map;
 
 import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class ProjectNode
-        extends PlanNode
+        extends InternalPlanNode
 {
     private final PlanNode source;
     private final Assignments assignments;
@@ -51,7 +50,7 @@ public class ProjectNode
     }
 
     @Override
-    public List<Symbol> getOutputSymbols()
+    public List<VariableReferenceExpression> getOutputVariables()
     {
         return assignments.getOutputs();
     }
@@ -74,20 +73,8 @@ public class ProjectNode
         return source;
     }
 
-    public boolean isIdentity()
-    {
-        for (Map.Entry<Symbol, Expression> entry : assignments.entrySet()) {
-            Expression expression = entry.getValue();
-            Symbol symbol = entry.getKey();
-            if (!(expression instanceof SymbolReference && ((SymbolReference) expression).getName().equals(symbol.getName()))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     @Override
-    public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
+    public <R, C> R accept(InternalPlanVisitor<R, C> visitor, C context)
     {
         return visitor.visitProject(this, context);
     }

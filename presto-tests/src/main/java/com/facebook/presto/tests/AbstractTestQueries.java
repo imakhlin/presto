@@ -16,11 +16,14 @@ package com.facebook.presto.tests;
 import com.facebook.presto.Session;
 import com.facebook.presto.SystemSessionProperties;
 import com.facebook.presto.metadata.FunctionListBuilder;
-import com.facebook.presto.metadata.SqlFunction;
+import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.function.SqlFunction;
 import com.facebook.presto.spi.session.PropertyMetadata;
 import com.facebook.presto.spi.type.Decimals;
 import com.facebook.presto.spi.type.SqlTimestampWithTimeZone;
 import com.facebook.presto.spi.type.VarcharType;
+import com.facebook.presto.sql.analyzer.FeaturesConfig.JoinDistributionType;
+import com.facebook.presto.sql.analyzer.FeaturesConfig.JoinReorderingStrategy;
 import com.facebook.presto.sql.analyzer.SemanticException;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.MaterializedRow;
@@ -51,7 +54,8 @@ import java.util.Set;
 import java.util.stream.IntStream;
 
 import static com.facebook.presto.SystemSessionProperties.DISTRIBUTED_SORT;
-import static com.facebook.presto.SystemSessionProperties.REORDER_JOINS;
+import static com.facebook.presto.SystemSessionProperties.JOIN_DISTRIBUTION_TYPE;
+import static com.facebook.presto.SystemSessionProperties.JOIN_REORDERING_STRATEGY;
 import static com.facebook.presto.connector.informationSchema.InformationSchemaMetadata.INFORMATION_SCHEMA;
 import static com.facebook.presto.operator.scalar.ApplyFunction.APPLY_FUNCTION;
 import static com.facebook.presto.operator.scalar.InvokeFunction.INVOKE_FUNCTION;
@@ -63,17 +67,15 @@ import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.INVALID_PARAMETER_USAGE;
-import static com.facebook.presto.sql.analyzer.SemanticErrorCode.MISSING_CATALOG;
-import static com.facebook.presto.sql.analyzer.SemanticErrorCode.MISSING_SCHEMA;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.MUST_BE_AGGREGATE_OR_GROUP_BY;
 import static com.facebook.presto.sql.tree.ExplainType.Type.DISTRIBUTED;
+import static com.facebook.presto.sql.tree.ExplainType.Type.IO;
 import static com.facebook.presto.sql.tree.ExplainType.Type.LOGICAL;
 import static com.facebook.presto.testing.MaterializedResult.resultBuilder;
 import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.CREATE_TABLE;
 import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.DELETE_TABLE;
 import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.INSERT_TABLE;
 import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.SELECT_COLUMN;
-import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.SELECT_TABLE;
 import static com.facebook.presto.testing.TestingAccessControlManager.privilege;
 import static com.facebook.presto.testing.TestingSession.TESTING_CATALOG;
 import static com.facebook.presto.testing.TestngUtils.toDataProvider;
@@ -110,33 +112,33 @@ public abstract class AbstractTestQueries
             .getFunctions();
 
     public static final List<PropertyMetadata<?>> TEST_SYSTEM_PROPERTIES = ImmutableList.of(
-            PropertyMetadata.stringSessionProperty(
+            PropertyMetadata.stringProperty(
                     "test_string",
                     "test string property",
                     "test default",
                     false),
-            PropertyMetadata.longSessionProperty(
+            PropertyMetadata.longProperty(
                     "test_long",
                     "test long property",
                     42L,
                     false));
     public static final List<PropertyMetadata<?>> TEST_CATALOG_PROPERTIES = ImmutableList.of(
-            PropertyMetadata.stringSessionProperty(
+            PropertyMetadata.stringProperty(
                     "connector_string",
                     "connector string property",
                     "connector default",
                     false),
-            PropertyMetadata.longSessionProperty(
+            PropertyMetadata.longProperty(
                     "connector_long",
                     "connector long property",
                     33L,
                     false),
-            PropertyMetadata.booleanSessionProperty(
+            PropertyMetadata.booleanProperty(
                     "connector_boolean",
                     "connector boolean property",
                     true,
                     false),
-            PropertyMetadata.doubleSessionProperty(
+            PropertyMetadata.doubleProperty(
                     "connector_double",
                     "connector double property",
                     99.0,
@@ -155,13 +157,6 @@ public abstract class AbstractTestQueries
     public void testParsingError()
     {
         assertQueryFails("SELECT foo FROM", "line 1:16: mismatched input '<EOF>'. Expecting: .*");
-    }
-
-    @Test
-    public void testShowPartitions()
-    {
-        assertQueryFails("SHOW PARTITIONS FROM orders", "line 1:1: SHOW PARTITIONS no longer exists. Use this instead: SELECT \\* FROM \"orders\\$partitions\"");
-        assertQueryFails("SHOW PARTITIONS FROM abc.orders", "line 1:1: SHOW PARTITIONS no longer exists. Use this instead: SELECT \\* FROM \"abc\".\"orders\\$partitions\"");
     }
 
     @Test
@@ -320,6 +315,30 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testRowSubscript()
+    {
+        // Subscript on Row with unnamed fields
+        assertQuery("SELECT ROW (1, 'a', true)[2]", "SELECT 'a'");
+        assertQuery("SELECT r[2] FROM (VALUES (ROW (ROW (1, 'a', true)))) AS v(r)", "SELECT 'a'");
+        assertQuery("SELECT r[1], r[2] FROM (SELECT ROW (name, regionkey) FROM nation ORDER BY name LIMIT 1) t(r)", "VALUES ('ALGERIA', 0)");
+
+        // Subscript on Row with named fields
+        assertQuery("SELECT (CAST (ROW (1, 'a', 2 ) AS ROW (field1 bigint, field2 varchar(1), field3 bigint)))[2]", "SELECT 'a'");
+
+        // Subscript on nested Row
+        assertQuery("SELECT ROW (1, 'a', ROW (false, 2, 'b'))[3][3]", "SELECT 'b'");
+
+        // Row subscript in filter condition
+        assertQuery("SELECT orderstatus FROM orders WHERE ROW (orderkey, custkey)[1] = 100", "SELECT 'O'");
+
+        // Row subscript in join condition
+        assertQuery("SELECT n.name, r.name FROM nation n JOIN region r ON ROW (n.name, n.regionkey)[2] = ROW (r.name, r.regionkey)[2] ORDER BY n.name LIMIT 1", "VALUES ('ALGERIA', 'AFRICA')");
+
+        //Row subscript in a lambda
+        assertQuery("SELECT apply(ROW (1, 2), r -> r[2])", "SELECT 2");
+    }
+
+    @Test
     public void testVarbinary()
     {
         assertQuery("SELECT LENGTH(x) FROM (SELECT from_base64('gw==') AS x)", "SELECT 1");
@@ -330,6 +349,7 @@ public abstract class AbstractTestQueries
     public void testRowFieldAccessor()
     {
         //Dereference only
+        assertQuery("SELECT a FROM (VALUES ROW (CAST(ROW(1, 2) AS ROW(col0 integer, col1 integer)).col0)) AS t (a)", "SELECT 1");
         assertQuery("SELECT a.col0 FROM (VALUES ROW (CAST(ROW(1, 2) AS ROW(col0 integer, col1 integer)))) AS t (a)", "SELECT 1");
         assertQuery("SELECT a.col0 FROM (VALUES ROW (CAST(ROW(1.0E0, 2.0E0) AS ROW(col0 integer, col1 integer)))) AS t (a)", "SELECT 1.0");
         assertQuery("SELECT a.col0 FROM (VALUES ROW (CAST(ROW(TRUE, FALSE) AS ROW(col0 boolean, col1 boolean)))) AS t (a)", "SELECT TRUE");
@@ -576,6 +596,9 @@ public abstract class AbstractTestQueries
         assertQuery("SELECT b FROM UNNEST(ARRAY[1, 2, 3], ARRAY[4, 5]) t(a, b)", "SELECT * FROM VALUES 4, 5, NULL");
         assertQuery("SELECT count(*) FROM UNNEST(ARRAY[1, 2, 3], ARRAY[4, 5])", "SELECT 3");
         assertQuery("SELECT a FROM UNNEST(ARRAY['kittens', 'puppies']) t(a)", "SELECT * FROM VALUES ('kittens'), ('puppies')");
+        assertQuery(
+                "WITH unioned AS ( SELECT 1 UNION ALL SELECT 2 ) SELECT * FROM unioned CROSS JOIN UNNEST(ARRAY[3]) steps (step)",
+                "SELECT * FROM (VALUES (1, 3), (2, 3))");
         assertQuery("" +
                         "SELECT c " +
                         "FROM UNNEST(ARRAY[1, 2, 3], ARRAY[4, 5]) t(a, b) " +
@@ -650,6 +673,32 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testReduceAgg()
+    {
+        assertQuery(
+                "SELECT x, reduce_agg(y, 1, (a, b) -> a * b, (a, b) -> a * b) " +
+                        "FROM (VALUES (1, 5), (1, 6), (1, 7), (2, 8), (2, 9), (3, 10)) AS t(x, y) " +
+                        "GROUP BY x",
+                "VALUES (1, 5 * 6 * 7), (2, 8 * 9), (3, 10)");
+        assertQuery(
+                "SELECT x, reduce_agg(y, 0, (a, b) -> a + b, (a, b) -> a + b) " +
+                        "FROM (VALUES (1, 5), (1, 6), (1, 7), (2, 8), (2, 9), (3, 10)) AS t(x, y) " +
+                        "GROUP BY x",
+                "VALUES (1, 5 + 6 + 7), (2, 8 + 9), (3, 10)");
+
+        assertQuery(
+                "SELECT x, reduce_agg(y, 1, (a, b) -> a * b, (a, b) -> a * b) " +
+                        "FROM (VALUES (1, CAST(5 AS DOUBLE)), (1, 6), (1, 7), (2, 8), (2, 9), (3, 10)) AS t(x, y) " +
+                        "GROUP BY x",
+                "VALUES (1, CAST(5 AS DOUBLE) * 6 * 7), (2, 8 * 9), (3, 10)");
+        assertQuery(
+                "SELECT x, reduce_agg(y, 0, (a, b) -> a + b, (a, b) -> a + b) " +
+                        "FROM (VALUES (1, CAST(5 AS DOUBLE)), (1, 6), (1, 7), (2, 8), (2, 9), (3, 10)) AS t(x, y) " +
+                        "GROUP BY x",
+                "VALUES (1, CAST(5 AS DOUBLE) + 6 + 7), (2, 8 + 9), (3, 10)");
+    }
+
+    @Test
     public void testRows()
     {
         // Using JSON_FORMAT(CAST(_ AS JSON)) because H2 does not support ROW type
@@ -691,7 +740,7 @@ public abstract class AbstractTestQueries
                         "SELECT * FROM a",
                 "VALUES (1.1, 2), (sin(3.3), 2+2)");
 
-        // implicity coersions
+        // implicit coersions
         assertQuery("VALUES 1, 2.2, 3, 4.4");
         assertQuery("VALUES (1, 2), (3.3, 4.4)");
         assertQuery("VALUES true, 1.0 in (1, 2, 3)");
@@ -1037,6 +1086,34 @@ public abstract class AbstractTestQueries
     {
         MaterializedResult actual = computeActual("SELECT orderkey FROM (SELECT orderkey FROM orders LIMIT 100) T LIMIT 10");
         MaterializedResult all = computeExpected("SELECT orderkey FROM orders", actual.getTypes());
+
+        assertEquals(actual.getMaterializedRows().size(), 10);
+        assertContains(all, actual);
+    }
+
+    @Test
+    public void testLimitWithJoin()
+    {
+        MaterializedResult actual = computeActual("SELECT o1.orderkey, o2.orderkey FROM orders o1 JOIN orders o2 on o1.orderkey = o2.orderkey LIMIT 10");
+        MaterializedResult all = computeActual("SELECT o1.orderkey, o2.orderkey FROM orders o1 JOIN  orders o2 on o1.orderkey = o2.orderkey");
+
+        assertEquals(actual.getMaterializedRows().size(), 10);
+        assertContains(all, actual);
+
+        actual = computeActual("SELECT o1.orderkey, o2.orderkey FROM orders o1 LEFT OUTER JOIN orders o2 on o1.orderkey = o2.orderkey LIMIT 10");
+        all = computeActual("SELECT o1.orderkey, o2.orderkey FROM orders o1 LEFT OUTER JOIN orders o2 on o1.orderkey = o2.orderkey");
+
+        assertEquals(actual.getMaterializedRows().size(), 10);
+        assertContains(all, actual);
+
+        actual = computeActual("SELECT o1.orderkey, o2.orderkey FROM orders o1 RIGHT OUTER JOIN orders o2 on o1.orderkey = o2.orderkey LIMIT 10");
+        all = computeActual("SELECT o1.orderkey, o2.orderkey FROM orders o1 RIGHT OUTER JOIN orders o2 on o1.orderkey = o2.orderkey");
+
+        assertEquals(actual.getMaterializedRows().size(), 10);
+        assertContains(all, actual);
+
+        actual = computeActual("SELECT o1.orderkey, o2.orderkey FROM orders o1 FULL OUTER JOIN orders o2 on o1.orderkey = o2.orderkey LIMIT 10");
+        all = computeActual("SELECT o1.orderkey, o2.orderkey FROM orders o1 FULL OUTER JOIN orders o2 on o1.orderkey = o2.orderkey");
 
         assertEquals(actual.getMaterializedRows().size(), 10);
         assertContains(all, actual);
@@ -3996,6 +4073,14 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testInvalidWindowFunction()
+    {
+        assertQueryFails("SELECT abs(x) OVER ()\n" +
+                "FROM (VALUES (1), (2), (3)) t(x)",
+                "line 1:1: Not a window function: abs");
+    }
+
+    @Test
     public void testScalarFunction()
     {
         assertQuery("SELECT SUBSTR('Quadratically', 5, 6)");
@@ -4027,6 +4112,13 @@ public abstract class AbstractTestQueries
 
         assertQuery("SELECT CAST(x AS BIGINT) FROM (VALUES 1, 2, 3, NULL) t (x)", "VALUES 1, 2, 3, NULL");
         assertQuery("SELECT try_cast(x AS BIGINT) FROM (VALUES 1, 2, 3, NULL) t (x)", "VALUES 1, 2, 3, NULL");
+    }
+
+    @Test
+    public void testNestedCast()
+    {
+        assertQuery("select cast(varchar_value as varchar(3)) || ' sfd' from (values ('9898.122')) t(varchar_value)", "VALUES '989 sfd'");
+        assertQuery("select cast(cast(varchar_value as varchar(3)) as varchar(5)) from (values ('9898.122')) t(varchar_value)", "VALUES '989'");
     }
 
     @Test
@@ -4291,6 +4383,12 @@ public abstract class AbstractTestQueries
         assertQuery("SELECT orderkey FROM orders WHERE orderkey IN (mod(1000, orderkey), " + longValues + ")");
         assertQuery("SELECT orderkey FROM orders WHERE orderkey NOT IN (mod(1000, orderkey), " + longValues + ")");
 
+        String varcharValues = range(0, 5000)
+                .mapToObj(i -> "'" + i + "'")
+                .collect(joining(", "));
+        assertQuery("SELECT orderkey FROM orders WHERE cast(orderkey AS VARCHAR) IN (" + varcharValues + ")");
+        assertQuery("SELECT orderkey FROM orders WHERE cast(orderkey AS VARCHAR) NOT IN (" + varcharValues + ")");
+
         String arrayValues = range(0, 5000)
                 .mapToObj(i -> format("ARRAY[%s, %s, %s]", i, i + 1, i + 2))
                 .collect(joining(", "));
@@ -4439,6 +4537,14 @@ public abstract class AbstractTestQueries
         String query = "SELECT * FROM orders";
         MaterializedResult result = computeActual("EXPLAIN (TYPE LOGICAL) " + query);
         assertEquals(getOnlyElement(result.getOnlyColumnAsSet()), getExplainPlan(query, LOGICAL));
+    }
+
+    @Test
+    public void testIOExplain()
+    {
+        String query = "SELECT * FROM orders";
+        MaterializedResult result = computeActual("EXPLAIN (TYPE IO) " + query);
+        assertEquals(getOnlyElement(result.getOnlyColumnAsSet()), getExplainPlan(query, IO));
     }
 
     @Test
@@ -4641,27 +4747,8 @@ public abstract class AbstractTestQueries
         result = computeActual("SHOW TABLES FROM " + catalog + "." + schema);
         assertTrue(result.getOnlyColumnAsSet().containsAll(expectedTables));
 
-        try {
-            computeActual("SHOW TABLES FROM UNKNOWN");
-            fail("Showing tables in an unknown schema should fail");
-        }
-        catch (SemanticException e) {
-            assertEquals(e.getCode(), MISSING_SCHEMA);
-        }
-        catch (RuntimeException e) {
-            assertEquals(e.getMessage(), "line 1:1: Schema 'unknown' does not exist");
-        }
-
-        try {
-            computeActual("SHOW TABLES FROM UNKNOWNCATALOG.UNKNOWNSCHEMA");
-            fail("Showing tables in an unknown catalog and unknown schema should fail with unknown catalog");
-        }
-        catch (SemanticException e) {
-            assertEquals(e.getCode(), MISSING_CATALOG);
-        }
-        catch (RuntimeException e) {
-            assertEquals(e.getMessage(), "line 1:1: Catalog 'unknowncatalog' does not exist");
-        }
+        assertQueryFails("SHOW TABLES FROM UNKNOWN", "line 1:1: Schema 'unknown' does not exist");
+        assertQueryFails("SHOW TABLES FROM UNKNOWNCATALOG.UNKNOWNSCHEMA", "line 1:1: Catalog 'unknowncatalog' does not exist");
     }
 
     @Test
@@ -4721,73 +4808,31 @@ public abstract class AbstractTestQueries
     }
 
     @Test
-    public void testShowStatsWithoutFromFails()
-    {
-        assertQueryFails("SHOW STATS FOR (SELECT 1)", ".*There must be exactly one table in query passed to SHOW STATS SELECT clause");
-    }
-
-    @Test
-    public void testShowStatsWithMultipleFromFails()
-    {
-        assertQueryFails("SHOW STATS FOR (SELECT * FROM orders, lineitem)", ".*There must be exactly one table in query passed to SHOW STATS SELECT clause");
-    }
-
-    @Test
-    public void testShowStatsWithGroupByFails()
-    {
-        assertQueryFails("SHOW STATS FOR (SELECT avg(totalprice) FROM orders GROUP BY clerk)", ".*GROUP BY is not supported in SHOW STATS SELECT clause");
-    }
-
-    @Test
-    public void testShowStatsWithHavingFails()
-    {
-        assertQueryFails("SHOW STATS FOR (SELECT avg(orderkey) FROM orders HAVING avg(orderkey) < 5)", ".*HAVING is not supported in SHOW STATS SELECT clause");
-    }
-
-    @Test
-    public void testShowStatsWithSelectDistinctFails()
-    {
-        assertQueryFails("SHOW STATS FOR (SELECT DISTINCT * FROM orders)", ".*DISTINCT is not supported by SHOW STATS SELECT clause");
-    }
-
-    @Test
-    public void testShowStatsWithSelectFunctionCallFails()
-    {
-        assertQueryFails("SHOW STATS FOR (SELECT sin(orderkey) FROM orders)", ".*Only \\* and column references are supported by SHOW STATS SELECT clause");
-    }
-
-    @Test
-    public void testShowStatsWithWhereFunctionCallFails()
-    {
-        assertQueryFails("SHOW STATS FOR (SELECT orderkey FROM orders WHERE sin(orderkey) > 0)", ".*Only literals, column references, comparators, is \\(not\\) null and logical operators are allowed in WHERE of SHOW STATS SELECT clause");
-    }
-
-    @Test
     public void testAtTimeZone()
     {
         // TODO the expected values here are non-sensical due to https://github.com/prestodb/presto/issues/7122
-        assertEquals(computeScalar("SELECT TIMESTAMP '2012-10-31 01:00' AT TIME ZONE INTERVAL '07:09' hour to minute"), zonedDateTime("2012-10-31 08:09:00.000 +07:09"));
-        assertEquals(computeScalar("SELECT TIMESTAMP '2012-10-31 01:00' AT TIME ZONE 'Asia/Oral'"), zonedDateTime("2012-10-31 06:00:00.000 Asia/Oral"));
+        assertEquals(computeScalar("SELECT TIMESTAMP '2012-10-31 01:00' AT TIME ZONE INTERVAL '07:09' hour to minute"), zonedDateTime("2012-10-30 18:09:00.000 +07:09"));
+        assertEquals(computeScalar("SELECT TIMESTAMP '2012-10-31 01:00' AT TIME ZONE 'Asia/Oral'"), zonedDateTime("2012-10-30 16:00:00.000 Asia/Oral"));
         assertEquals(computeScalar("SELECT MIN(x) AT TIME ZONE 'America/Chicago' FROM (VALUES TIMESTAMP '1970-01-01 00:01:00+00:00') t(x)"), zonedDateTime("1969-12-31 18:01:00.000 America/Chicago"));
-        assertEquals(computeScalar("SELECT TIMESTAMP '2012-10-31 01:00' AT TIME ZONE '+07:09'"), zonedDateTime("2012-10-31 08:09:00.000 +07:09"));
+        assertEquals(computeScalar("SELECT TIMESTAMP '2012-10-31 01:00' AT TIME ZONE '+07:09'"), zonedDateTime("2012-10-30 18:09:00.000 +07:09"));
         assertEquals(computeScalar("SELECT TIMESTAMP '2012-10-31 01:00 UTC' AT TIME ZONE 'America/Los_Angeles'"), zonedDateTime("2012-10-30 18:00:00.000 America/Los_Angeles"));
-        assertEquals(computeScalar("SELECT TIMESTAMP '2012-10-31 01:00' AT TIME ZONE 'America/Los_Angeles'"), zonedDateTime("2012-10-30 18:00:00.000 America/Los_Angeles"));
+        assertEquals(computeScalar("SELECT TIMESTAMP '2012-10-31 01:00' AT TIME ZONE 'America/Los_Angeles'"), zonedDateTime("2012-10-30 04:00:00.000 America/Los_Angeles"));
         assertEquals(computeActual("SELECT x AT TIME ZONE 'America/Los_Angeles' FROM (values TIMESTAMP '1970-01-01 00:01:00+00:00', TIMESTAMP '1970-01-01 08:01:00+08:00', TIMESTAMP '1969-12-31 16:01:00-08:00') t(x)").getOnlyColumnAsSet(),
                 ImmutableSet.of(zonedDateTime("1969-12-31 16:01:00.000 America/Los_Angeles")));
         assertEquals(computeActual("SELECT x AT TIME ZONE 'America/Los_Angeles' FROM (values TIMESTAMP '1970-01-01 00:01:00', TIMESTAMP '1970-01-01 08:01:00', TIMESTAMP '1969-12-31 16:01:00') t(x)").getOnlyColumn().collect(toList()),
-                ImmutableList.of(zonedDateTime("1969-12-31 16:01:00.000 America/Los_Angeles"), zonedDateTime("1970-01-01 00:01:00.000 America/Los_Angeles"), zonedDateTime("1969-12-31 08:01:00.000 America/Los_Angeles")));
+                ImmutableList.of(zonedDateTime("1970-01-01 03:01:00.000 America/Los_Angeles"), zonedDateTime("1970-01-01 11:01:00.000 America/Los_Angeles"), zonedDateTime("1969-12-31 19:01:00.000 America/Los_Angeles")));
         assertEquals(computeScalar("SELECT min(x) AT TIME ZONE 'America/Los_Angeles' FROM (values TIMESTAMP '1970-01-01 00:01:00+00:00', TIMESTAMP '1970-01-01 08:01:00+08:00', TIMESTAMP '1969-12-31 16:01:00-08:00') t(x)"),
                 zonedDateTime("1969-12-31 16:01:00.000 America/Los_Angeles"));
 
         // with chained AT TIME ZONE
-        assertEquals(computeScalar("SELECT TIMESTAMP '2012-10-31 01:00' AT TIME ZONE 'America/Los_Angeles' AT TIME ZONE 'UTC'"), zonedDateTime("2012-10-31 01:00:00.000 UTC"));
-        assertEquals(computeScalar("SELECT TIMESTAMP '2012-10-31 01:00' AT TIME ZONE 'Asia/Tokyo' AT TIME ZONE 'America/Los_Angeles'"), zonedDateTime("2012-10-30 18:00:00.000 America/Los_Angeles"));
-        assertEquals(computeScalar("SELECT TIMESTAMP '2012-10-31 01:00' AT TIME ZONE 'America/Los_Angeles' AT TIME ZONE 'Asia/Shanghai'"), zonedDateTime("2012-10-31 09:00:00.000 Asia/Shanghai"));
+        assertEquals(computeScalar("SELECT TIMESTAMP '2012-10-31 01:00' AT TIME ZONE 'America/Los_Angeles' AT TIME ZONE 'UTC'"), zonedDateTime("2012-10-30 11:00:00.000 UTC"));
+        assertEquals(computeScalar("SELECT TIMESTAMP '2012-10-31 01:00' AT TIME ZONE 'Asia/Tokyo' AT TIME ZONE 'America/Los_Angeles'"), zonedDateTime("2012-10-30 04:00:00.000 America/Los_Angeles"));
+        assertEquals(computeScalar("SELECT TIMESTAMP '2012-10-31 01:00' AT TIME ZONE 'America/Los_Angeles' AT TIME ZONE 'Asia/Shanghai'"), zonedDateTime("2012-10-30 19:00:00.000 Asia/Shanghai"));
         assertEquals(computeScalar("SELECT min(x) AT TIME ZONE 'America/Los_Angeles' AT TIME ZONE 'UTC' FROM (values TIMESTAMP '1970-01-01 00:01:00+00:00', TIMESTAMP '1970-01-01 08:01:00+08:00', TIMESTAMP '1969-12-31 16:01:00-08:00') t(x)"),
                 zonedDateTime("1970-01-01 00:01:00.000 UTC"));
 
         // with AT TIME ZONE in VALUES
-        assertEquals(computeScalar("SELECT * FROM (VALUES TIMESTAMP '2012-10-31 01:00' AT TIME ZONE 'Asia/Oral')"), zonedDateTime("2012-10-31 06:00:00.000 Asia/Oral"));
+        assertEquals(computeScalar("SELECT * FROM (VALUES TIMESTAMP '2012-10-31 01:00' AT TIME ZONE 'Asia/Oral')"), zonedDateTime("2012-10-30 16:00:00.000 Asia/Oral"));
     }
 
     private ZonedDateTime zonedDateTime(String value)
@@ -4853,6 +4898,20 @@ public abstract class AbstractTestQueries
         assertQuery(
                 "SELECT table_name FROM information_schema.columns WHERE data_type = 'bigint' AND table_name = 'customer' and column_name = 'custkey' LIMIT 1",
                 "SELECT 'customer' table_name");
+    }
+
+    @Test
+    public void testInformationSchemaUppercaseName()
+    {
+        assertQuery(
+                "SELECT table_name FROM information_schema.tables WHERE table_catalog = 'LOCAL'",
+                "SELECT '' WHERE false");
+        assertQuery(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'TINY'",
+                "SELECT '' WHERE false");
+        assertQuery(
+                "SELECT table_name FROM information_schema.tables WHERE table_name = 'ORDERS'",
+                "SELECT '' WHERE false");
     }
 
     @Test
@@ -6074,9 +6133,8 @@ public abstract class AbstractTestQueries
 
         // group by
         assertQuery("SELECT max(n.regionkey), 2 * n.nationkey, (SELECT n.nationkey) FROM nation n GROUP BY n.nationkey");
-        assertQueryFails(
-                "SELECT max(l.quantity), 2 * l.orderkey FROM lineitem l GROUP BY l.orderkey HAVING max(l.quantity) < (SELECT l.orderkey)",
-                UNSUPPORTED_CORRELATED_SUBQUERY_ERROR_MSG);
+        assertQuery(
+                "SELECT max(l.quantity), 2 * l.orderkey FROM lineitem l GROUP BY l.orderkey HAVING max(l.quantity) < (SELECT l.orderkey)");
         assertQuery("SELECT max(l.quantity), 2 * l.orderkey FROM lineitem l GROUP BY l.orderkey, (SELECT l.orderkey)");
 
         // join
@@ -6915,7 +6973,7 @@ public abstract class AbstractTestQueries
         for (int i = 0; i < 3; i++) {
             MaterializedResult results = computeActual(format("SELECT shuffle(ARRAY %s) FROM orders LIMIT 10", expected));
             List<MaterializedRow> rows = results.getMaterializedRows();
-            assertTrue(rows.size() == 10);
+            assertEquals(rows.size(), 10);
 
             for (MaterializedRow row : rows) {
                 List<Integer> actual = (List<Integer>) row.getField(0);
@@ -7114,6 +7172,42 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testApproxSetBigintWithMaxError()
+    {
+        MaterializedResult actual = computeActual("SELECT cardinality(approx_set(custkey, 0.01)) FROM orders");
+
+        MaterializedResult expected = resultBuilder(getSession(), BIGINT)
+                .row(1000L)
+                .build();
+
+        assertEquals(actual.getMaterializedRows(), expected.getMaterializedRows());
+    }
+
+    @Test
+    public void testApproxSetVarcharWithMaxError()
+    {
+        MaterializedResult actual = computeActual("SELECT cardinality(approx_set(CAST(custkey AS VARCHAR), 0.01)) FROM orders");
+
+        MaterializedResult expected = resultBuilder(getSession(), BIGINT)
+                .row(1000L)
+                .build();
+
+        assertEquals(actual.getMaterializedRows(), expected.getMaterializedRows());
+    }
+
+    @Test
+    public void testApproxSetDoubleWithMaxError()
+    {
+        MaterializedResult actual = computeActual("SELECT cardinality(approx_set(CAST(custkey AS DOUBLE), 0.01)) FROM orders");
+
+        MaterializedResult expected = resultBuilder(getSession(), BIGINT)
+                .row(1000L)
+                .build();
+
+        assertEquals(actual.getMaterializedRows(), expected.getMaterializedRows());
+    }
+
+    @Test
     public void testMergeHyperLogLog()
     {
         MaterializedResult actual = computeActual("SELECT cardinality(merge(create_hll(custkey))) FROM orders");
@@ -7174,7 +7268,7 @@ public abstract class AbstractTestQueries
     @Test
     public void testMergeHyperLogLogOnlyNulls()
     {
-        MaterializedResult actual = computeActual("SELECT cardinality(merge(null)) FROM orders");
+        MaterializedResult actual = computeActual("SELECT cardinality(merge(CAST (null AS HyperLogLog))) FROM orders");
 
         MaterializedResult expected = resultBuilder(getSession(), BIGINT)
                 .row(new Object[] {null})
@@ -7191,6 +7285,22 @@ public abstract class AbstractTestQueries
                 .row(0L)
                 .build();
         assertEquals(actual.getMaterializedRows(), expected.getMaterializedRows());
+    }
+
+    @Test
+    public void testEmptyApproxSetWithMaxError()
+    {
+        MaterializedResult actual = computeActual("SELECT cardinality(empty_approx_set(0.1))");
+        MaterializedResult expected = resultBuilder(getSession(), BIGINT)
+                .row(0L)
+                .build();
+        assertEquals(actual.getMaterializedRows(), expected.getMaterializedRows());
+    }
+
+    @Test(expectedExceptions = {RuntimeException.class, PrestoException.class}, expectedExceptionsMessageRegExp = "Max standard error must be in.*")
+    public void testEmptyApproxSetWithMaxErrorOutsideBounds()
+    {
+        computeActual("SELECT cardinality(empty_approx_set(0.3))");
     }
 
     @Test
@@ -7211,6 +7321,22 @@ public abstract class AbstractTestQueries
                 .row(1002L)
                 .build();
         assertEquals(actual.getMaterializedRows(), expected.getMaterializedRows());
+    }
+
+    @Test
+    public void testMergeEmptyNonEmptyApproxSetWithSameMaxError()
+    {
+        MaterializedResult actual = computeActual("SELECT cardinality(merge(c)) FROM (SELECT create_hll(custkey, 0.1) c FROM orders UNION ALL SELECT empty_approx_set(0.1))");
+        MaterializedResult expected = resultBuilder(getSession(), BIGINT)
+                .row(1046L)
+                .build();
+        assertEquals(actual.getMaterializedRows(), expected.getMaterializedRows());
+    }
+
+    @Test(expectedExceptions = {RuntimeException.class, PrestoException.class}, expectedExceptionsMessageRegExp = "Cannot merge HLLs with different number of buckets.*")
+    public void testMergeEmptyNonEmptyApproxSetWithDifferentMaxError()
+    {
+        computeActual("SELECT cardinality(merge(c)) FROM (SELECT create_hll(custkey, 0.1) c FROM orders UNION ALL SELECT empty_approx_set(0.2))");
     }
 
     @Test
@@ -7406,7 +7532,6 @@ public abstract class AbstractTestQueries
     @Test
     public void testAccessControl()
     {
-        assertAccessDenied("SELECT COUNT(true) FROM orders", "Cannot select from table .*.orders.*", privilege("orders", SELECT_TABLE));
         assertAccessDenied("INSERT INTO orders SELECT * FROM orders", "Cannot insert into table .*.orders.*", privilege("orders", INSERT_TABLE));
         assertAccessDenied("DELETE FROM orders", "Cannot delete from table .*.orders.*", privilege("orders", DELETE_TABLE));
         assertAccessDenied("CREATE TABLE foo AS SELECT * FROM orders", "Cannot create table .*.foo.*", privilege("foo", CREATE_TABLE));
@@ -7419,6 +7544,9 @@ public abstract class AbstractTestQueries
         assertAccessDenied("SELECT 1 FROM region, nation where region.regionkey = nation.nationkey", "Cannot select from columns \\[nationkey\\] in table .*.nation.*", privilege("nationkey", SELECT_COLUMN));
         assertAccessDenied("SELECT count(*) FROM nation", "Cannot select from columns \\[\\] in table .*.nation.*", privilege("nation", SELECT_COLUMN));
         assertAccessDenied("WITH t1 AS (SELECT * FROM nation) SELECT * FROM t1", "Cannot select from columns \\[nationkey, regionkey, name, comment\\] in table .*.nation.*", privilege("nationkey", SELECT_COLUMN));
+        assertAccessAllowed("SELECT name AS my_alias FROM nation", privilege("my_alias", SELECT_COLUMN));
+        assertAccessAllowed("SELECT my_alias from (SELECT name AS my_alias FROM nation)", privilege("my_alias", SELECT_COLUMN));
+        assertAccessDenied("SELECT name AS my_alias FROM nation", "Cannot select from columns \\[name\\] in table .*.nation.*", privilege("name", SELECT_COLUMN));
     }
 
     @Test
@@ -8090,7 +8218,8 @@ public abstract class AbstractTestQueries
     protected Session noJoinReordering()
     {
         return Session.builder(getSession())
-                .setSystemProperty(REORDER_JOINS, "false")
+                .setSystemProperty(JOIN_REORDERING_STRATEGY, JoinReorderingStrategy.NONE.name())
+                .setSystemProperty(JOIN_DISTRIBUTION_TYPE, JoinDistributionType.PARTITIONED.name())
                 .build();
     }
 }

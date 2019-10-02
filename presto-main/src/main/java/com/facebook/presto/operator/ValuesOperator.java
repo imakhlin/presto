@@ -14,7 +14,7 @@
 package com.facebook.presto.operator;
 
 import com.facebook.presto.spi.Page;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterators;
 
@@ -113,7 +113,7 @@ public class ValuesOperator
         }
         Page page = pages.next();
         if (page != null) {
-            operatorContext.recordGeneratedInput(page.getSizeInBytes(), page.getPositionCount());
+            operatorContext.recordProcessedInput(page.getSizeInBytes(), page.getPositionCount());
         }
         return page;
     }

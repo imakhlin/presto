@@ -36,24 +36,31 @@ public abstract class AbstractVariableWidthBlock
     }
 
     @Override
-    public byte getByte(int position, int offset)
+    public byte getByte(int position)
     {
         checkReadablePosition(position);
-        return getRawSlice(position).getByte(getPositionOffset(position) + offset);
+        return getRawSlice(position).getByte(getPositionOffset(position));
     }
 
     @Override
-    public short getShort(int position, int offset)
+    public short getShort(int position)
     {
         checkReadablePosition(position);
-        return getRawSlice(position).getShort(getPositionOffset(position) + offset);
+        return getRawSlice(position).getShort(getPositionOffset(position));
     }
 
     @Override
-    public int getInt(int position, int offset)
+    public int getInt(int position)
     {
         checkReadablePosition(position);
-        return getRawSlice(position).getInt(getPositionOffset(position) + offset);
+        return getRawSlice(position).getInt(getPositionOffset(position));
+    }
+
+    @Override
+    public long getLong(int position)
+    {
+        checkReadablePosition(position);
+        return getRawSlice(position).getLong(getPositionOffset(position));
     }
 
     @Override
@@ -140,6 +147,12 @@ public abstract class AbstractVariableWidthBlock
         Slice copy = Slices.copyOf(getRawSlice(position), offset, entrySize);
 
         return new VariableWidthBlock(0, 1, copy, new int[] {0, copy.length()}, null);
+    }
+
+    @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        return isNull(position) ? 0 : getSliceLength(position);
     }
 
     @Override

@@ -13,11 +13,12 @@
  */
 package com.facebook.presto;
 
-import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.metadata.SessionPropertyManager;
+import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.security.BasicPrincipal;
 import com.facebook.presto.spi.security.Identity;
+import com.facebook.presto.spi.security.SelectedRole;
 import com.facebook.presto.spi.session.ResourceEstimates;
 import com.facebook.presto.spi.type.TimeZoneKey;
 import com.facebook.presto.sql.SqlPath;
@@ -32,6 +33,7 @@ import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Set;
 
+import static java.util.Collections.emptyMap;
 import static java.util.Objects.requireNonNull;
 
 public final class SessionRepresentation
@@ -57,6 +59,8 @@ public final class SessionRepresentation
     private final ResourceEstimates resourceEstimates;
     private final Map<String, String> systemProperties;
     private final Map<ConnectorId, Map<String, String>> catalogProperties;
+    private final Map<String, Map<String, String>> unprocessedCatalogProperties;
+    private final Map<String, SelectedRole> roles;
     private final Map<String, String> preparedStatements;
 
     @JsonCreator
@@ -82,6 +86,8 @@ public final class SessionRepresentation
             @JsonProperty("startTime") long startTime,
             @JsonProperty("systemProperties") Map<String, String> systemProperties,
             @JsonProperty("catalogProperties") Map<ConnectorId, Map<String, String>> catalogProperties,
+            @JsonProperty("unprocessedCatalogProperties") Map<String, Map<String, String>> unprocessedCatalogProperties,
+            @JsonProperty("roles") Map<String, SelectedRole> roles,
             @JsonProperty("preparedStatements") Map<String, String> preparedStatements)
     {
         this.queryId = requireNonNull(queryId, "queryId is null");
@@ -104,6 +110,7 @@ public final class SessionRepresentation
         this.resourceEstimates = requireNonNull(resourceEstimates, "resourceEstimates is null");
         this.startTime = startTime;
         this.systemProperties = ImmutableMap.copyOf(systemProperties);
+        this.roles = ImmutableMap.copyOf(roles);
         this.preparedStatements = ImmutableMap.copyOf(preparedStatements);
 
         ImmutableMap.Builder<ConnectorId, Map<String, String>> catalogPropertiesBuilder = ImmutableMap.builder();
@@ -111,6 +118,12 @@ public final class SessionRepresentation
             catalogPropertiesBuilder.put(entry.getKey(), ImmutableMap.copyOf(entry.getValue()));
         }
         this.catalogProperties = catalogPropertiesBuilder.build();
+
+        ImmutableMap.Builder<String, Map<String, String>> unprocessedCatalogPropertiesBuilder = ImmutableMap.builder();
+        for (Entry<String, Map<String, String>> entry : unprocessedCatalogProperties.entrySet()) {
+            unprocessedCatalogPropertiesBuilder.put(entry.getKey(), ImmutableMap.copyOf(entry.getValue()));
+        }
+        this.unprocessedCatalogProperties = unprocessedCatalogPropertiesBuilder.build();
     }
 
     @JsonProperty
@@ -240,6 +253,18 @@ public final class SessionRepresentation
     }
 
     @JsonProperty
+    public Map<String, Map<String, String>> getUnprocessedCatalogProperties()
+    {
+        return unprocessedCatalogProperties;
+    }
+
+    @JsonProperty
+    public Map<String, SelectedRole> getRoles()
+    {
+        return roles;
+    }
+
+    @JsonProperty
     public Map<String, String> getPreparedStatements()
     {
         return preparedStatements;
@@ -247,11 +272,16 @@ public final class SessionRepresentation
 
     public Session toSession(SessionPropertyManager sessionPropertyManager)
     {
+        return toSession(sessionPropertyManager, emptyMap());
+    }
+
+    public Session toSession(SessionPropertyManager sessionPropertyManager, Map<String, String> extraCredentials)
+    {
         return new Session(
                 new QueryId(queryId),
                 transactionId,
                 clientTransactionSupport,
-                new Identity(user, principal.map(BasicPrincipal::new)),
+                new Identity(user, principal.map(BasicPrincipal::new), roles, extraCredentials),
                 source,
                 catalog,
                 schema,
@@ -268,7 +298,7 @@ public final class SessionRepresentation
                 startTime,
                 systemProperties,
                 catalogProperties,
-                ImmutableMap.of(),
+                unprocessedCatalogProperties,
                 sessionPropertyManager,
                 preparedStatements);
     }

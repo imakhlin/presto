@@ -19,9 +19,9 @@ import com.facebook.presto.operator.DriverContext;
 import com.facebook.presto.operator.DriverFactory;
 import com.facebook.presto.operator.OperatorFactory;
 import com.facebook.presto.operator.TaskContext;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.gen.JoinCompiler;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.LocalQueryRunner;
 import com.facebook.presto.testing.NullOutputOperator.NullOutputOperatorFactory;
 import com.google.common.collect.ImmutableList;
@@ -61,7 +61,7 @@ public abstract class AbstractSimpleOperatorBenchmark
     protected List<Driver> createDrivers(TaskContext taskContext)
     {
         DriverFactory driverFactory = createDriverFactory();
-        DriverContext driverContext = taskContext.addPipelineContext(0, true, true).addDriverContext();
+        DriverContext driverContext = taskContext.addPipelineContext(0, true, true, false).addDriverContext();
         Driver driver = driverFactory.createDriver(driverContext);
         return ImmutableList.of(driver);
     }

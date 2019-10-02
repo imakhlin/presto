@@ -13,12 +13,12 @@
  */
 package com.facebook.presto.sql.query;
 
+import com.facebook.presto.spi.plan.ValuesNode;
 import com.facebook.presto.sql.planner.Plan;
 import com.facebook.presto.sql.planner.assertions.PlanMatchPattern;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
-import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import org.intellij.lang.annotations.Language;
@@ -182,11 +182,27 @@ public class TestSubqueries
     }
 
     @Test
+    public void testLateralWithUnnest()
+    {
+        assertions.assertFails(
+                "SELECT * FROM (VALUES ARRAY[1]) t(x), LATERAL (SELECT * FROM UNNEST(x))",
+                UNSUPPORTED_CORRELATED_SUBQUERY_ERROR_MSG);
+    }
+
+    @Test
     public void testCorrelatedScalarSubquery()
     {
         assertions.assertQuery(
                 "SELECT * FROM (VALUES 1, 2) t2(b) WHERE (SELECT b) = 2",
                 "VALUES 2");
+    }
+
+    @Test
+    public void testCorrelatedSubqueryWithExplicitCoercion()
+    {
+        assertions.assertQuery(
+                "SELECT 1 FROM (VALUES 1, 2) t1(b) WHERE 1 = (SELECT cast(b as decimal(7,2)))",
+                "VALUES 1");
     }
 
     private void assertExistsRewrittenToAggregationBelowJoin(@Language("SQL") String actual, @Language("SQL") String expected, boolean extraAggregation)

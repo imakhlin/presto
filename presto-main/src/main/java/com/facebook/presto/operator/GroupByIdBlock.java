@@ -62,6 +62,12 @@ public class GroupByIdBlock
     }
 
     @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
+    {
+        return block.getPositionsSizeInBytes(positions);
+    }
+
+    @Override
     public Block copyRegion(int positionOffset, int length)
     {
         return block.copyRegion(positionOffset, length);
@@ -74,21 +80,27 @@ public class GroupByIdBlock
     }
 
     @Override
-    public byte getByte(int position, int offset)
+    public byte getByte(int position)
     {
-        return block.getByte(position, offset);
+        return block.getByte(position);
     }
 
     @Override
-    public short getShort(int position, int offset)
+    public short getShort(int position)
     {
-        return block.getShort(position, offset);
+        return block.getShort(position);
     }
 
     @Override
-    public int getInt(int position, int offset)
+    public int getInt(int position)
     {
-        return block.getInt(position, offset);
+        return block.getInt(position);
+    }
+
+    @Override
+    public long getLong(int position)
+    {
+        return block.getLong(position);
     }
 
     @Override
@@ -182,6 +194,12 @@ public class GroupByIdBlock
     }
 
     @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        return block.getEstimatedDataSizeForStats(position);
+    }
+
+    @Override
     public void retainedBytesForEachPart(BiConsumer<Object, Long> consumer)
     {
         consumer.accept(block, block.getRetainedSizeInBytes());
@@ -213,5 +231,65 @@ public class GroupByIdBlock
     public Block getLoadedBlock()
     {
         return block.getLoadedBlock();
+    }
+
+    @Override
+    public byte getByteUnchecked(int internalPosition)
+    {
+        return block.getByte(internalPosition);
+    }
+
+    @Override
+    public short getShortUnchecked(int internalPosition)
+    {
+        return block.getShort(internalPosition);
+    }
+
+    @Override
+    public int getIntUnchecked(int internalPosition)
+    {
+        return block.getInt(internalPosition);
+    }
+
+    @Override
+    public long getLongUnchecked(int internalPosition)
+    {
+        return block.getLong(internalPosition);
+    }
+
+    @Override
+    public long getLongUnchecked(int internalPosition, int offset)
+    {
+        return block.getLong(internalPosition, offset);
+    }
+
+    @Override
+    public Slice getSliceUnchecked(int internalPosition, int offset, int length)
+    {
+        return block.getSlice(internalPosition, offset, length);
+    }
+
+    @Override
+    public int getSliceLengthUnchecked(int internalPosition)
+    {
+        return block.getSliceLength(internalPosition);
+    }
+
+    @Override
+    public Block getBlockUnchecked(int internalPosition)
+    {
+        return block.getObject(internalPosition, Block.class);
+    }
+
+    @Override
+    public int getOffsetBase()
+    {
+        return 0;
+    }
+
+    @Override
+    public boolean isNullUnchecked(int internalPosition)
+    {
+        return block.isNull(internalPosition);
     }
 }

@@ -49,9 +49,7 @@ public class RowBlockBuilder
     {
         this(
                 blockBuilderStatus,
-                fieldTypes.stream()
-                        .map(type -> type.createBlockBuilder(blockBuilderStatus, expectedEntries))
-                        .toArray(BlockBuilder[]::new),
+                createFieldBlockBuilders(fieldTypes, blockBuilderStatus, expectedEntries),
                 new int[expectedEntries + 1],
                 new boolean[expectedEntries]);
     }
@@ -67,6 +65,16 @@ public class RowBlockBuilder
         this.fieldBlockBuilders = requireNonNull(fieldBlockBuilders, "fieldBlockBuilders is null");
     }
 
+    private static BlockBuilder[] createFieldBlockBuilders(List<Type> fieldTypes, BlockBuilderStatus blockBuilderStatus, int expectedEntries)
+    {
+        // Stream API should not be used since constructor can be called in performance sensitive sections
+        BlockBuilder[] fieldBlockBuilders = new BlockBuilder[fieldTypes.size()];
+        for (int i = 0; i < fieldTypes.size(); i++) {
+            fieldBlockBuilders[i] = fieldTypes.get(i).createBlockBuilder(blockBuilderStatus, expectedEntries);
+        }
+        return fieldBlockBuilders;
+    }
+
     @Override
     protected Block[] getRawFieldBlocks()
     {
@@ -80,7 +88,7 @@ public class RowBlockBuilder
     }
 
     @Override
-    protected int getOffsetBase()
+    public int getOffsetBase()
     {
         return 0;
     }

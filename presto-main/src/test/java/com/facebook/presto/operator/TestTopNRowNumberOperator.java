@@ -17,10 +17,10 @@ import com.facebook.presto.RowPagesBuilder;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.SortOrder;
+import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.gen.JoinCompiler;
-import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.MaterializedResult;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
@@ -64,7 +64,7 @@ public class TestTopNRowNumberOperator
         executor = newCachedThreadPool(daemonThreadsNamed("test-executor-%s"));
         scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("test-scheduledExecutor-%s"));
         driverContext = createTaskContext(executor, scheduledExecutor, TEST_SESSION)
-                .addPipelineContext(0, true, true)
+                .addPipelineContext(0, true, true, false)
                 .addDriverContext();
         joinCompiler = new JoinCompiler(MetadataManager.createTestMetadataManager(), new FeaturesConfig());
     }
@@ -224,7 +224,7 @@ public class TestTopNRowNumberOperator
         for (Page page : result.getOutput()) {
             assertEquals(page.getChannelCount(), 2);
             for (int i = 0; i < page.getPositionCount(); i++) {
-                assertEquals(page.getBlock(1).getByte(i, 0), 1);
+                assertEquals(page.getBlock(1).getByte(i), 1);
                 count++;
             }
         }

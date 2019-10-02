@@ -13,12 +13,14 @@
  */
 package com.facebook.presto.tests;
 
+import com.facebook.presto.Session;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.MaterializedRow;
 import org.testng.annotations.Test;
 
 import java.util.List;
 
+import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.testing.MaterializedResult.resultBuilder;
 import static com.facebook.presto.tests.QueryAssertions.assertEqualsIgnoreOrder;
 import static org.testng.Assert.assertEquals;
@@ -76,6 +78,24 @@ public abstract class AbstractTestAggregations
     public void testCountWithNullIfPredicate()
     {
         assertQuery("SELECT COUNT(*) FROM orders WHERE NULLIF(orderstatus, 'F') = orderstatus ");
+    }
+
+    @Test
+    public void testAggregationPushdownThroughOuterJoinNotFiringInCorrelatedAggregatesLeftSide()
+    {
+        assertQuery("SELECT max(x) FROM" +
+                        "(SELECT * from (VALUES 1) t(x) LEFT JOIN (VALUES 1) t2(y) ON t.x = t2.y)" +
+                        "GROUP BY x",
+                "VALUES 1");
+    }
+
+    @Test
+    public void testAggregationPushdownThroughOuterJoinNotFiringInCorrelatedAggregatesRightSide()
+    {
+        assertQuery("SELECT max(y) FROM" +
+                        "(SELECT * from (VALUES 1) t(x) LEFT JOIN (VALUES 1) t2(y) ON t.x = t2.y)" +
+                        "GROUP BY y",
+                "VALUES 1");
     }
 
     @Test
@@ -188,6 +208,17 @@ public abstract class AbstractTestAggregations
     {
         assertQuery("SELECT COUNT(DISTINCT custkey + 1) FROM orders", "SELECT COUNT(*) FROM (SELECT DISTINCT custkey + 1 FROM orders) t");
         assertQuery("SELECT COUNT(DISTINCT linenumber), COUNT(*) from lineitem where linenumber < 0");
+        assertQuery(" SELECT COUNT(*) FROM (SELECT orderkey, COUNT(DISTINCT partkey) FROM lineitem " +
+                        "  GROUP BY orderkey " +
+                        "HAVING COUNT(DISTINCT partkey) != CARDINALITY(ARRAY_DISTINCT(ARRAY_AGG(partkey))))",
+                "VALUES 0");
+        assertQuery(Session.builder(TEST_SESSION)
+                        .setSystemProperty("use_mark_distinct", "false")
+                        .build(),
+                " SELECT COUNT(*) FROM (SELECT orderkey, COUNT(DISTINCT partkey) FROM lineitem " +
+                        "  GROUP BY orderkey " +
+                        "HAVING COUNT(DISTINCT partkey) != CARDINALITY(ARRAY_DISTINCT(ARRAY_AGG(partkey))))",
+                "VALUES 0");
     }
 
     @Test
@@ -620,14 +651,14 @@ public abstract class AbstractTestAggregations
     public void testGroupByExtract()
     {
         // whole expression in group by
-        assertQuery("SELECT EXTRACT(YEAR FROM now()), count(*) FROM orders GROUP BY EXTRACT(YEAR FROM now())");
+        assertQuery("SELECT EXTRACT(YEAR FROM orderdate), count(*) FROM orders GROUP BY EXTRACT(YEAR FROM orderdate)");
 
         assertQuery(
-                "SELECT EXTRACT(YEAR FROM now()), count(*) FROM orders GROUP BY 1",
-                "SELECT EXTRACT(YEAR FROM now()), count(*) FROM orders GROUP BY EXTRACT(YEAR FROM now())");
+                "SELECT EXTRACT(YEAR FROM orderdate), count(*) FROM orders GROUP BY 1",
+                "SELECT EXTRACT(YEAR FROM orderdate), count(*) FROM orders GROUP BY EXTRACT(YEAR FROM orderdate)");
 
         // argument in group by
-        assertQuery("SELECT EXTRACT(YEAR FROM now()), count(*) FROM orders GROUP BY now()");
+        assertQuery("SELECT EXTRACT(YEAR FROM orderdate), count(*) FROM orders GROUP BY orderdate");
     }
 
     @Test
@@ -660,25 +691,29 @@ public abstract class AbstractTestAggregations
     @Test
     public void testApproximateCountDistinct()
     {
+        // test NULL
+        assertQuery("SELECT approx_distinct(NULL)", "SELECT 0");
+        assertQuery("SELECT approx_distinct(NULL, 0.023)", "SELECT 0");
+
         // test date
         assertQuery("SELECT approx_distinct(orderdate) FROM orders", "SELECT 2443");
         assertQuery("SELECT approx_distinct(orderdate, 0.023) FROM orders", "SELECT 2443");
 
         // test timestamp
-        assertQuery("SELECT approx_distinct(CAST(orderdate AS TIMESTAMP)) FROM orders", "SELECT 2384");
-        assertQuery("SELECT approx_distinct(CAST(orderdate AS TIMESTAMP), 0.023) FROM orders", "SELECT 2384");
+        assertQuery("SELECT approx_distinct(CAST(orderdate AS TIMESTAMP)) FROM orders", "SELECT 2347");
+        assertQuery("SELECT approx_distinct(CAST(orderdate AS TIMESTAMP), 0.023) FROM orders", "SELECT 2347");
 
         // test timestamp with time zone
-        assertQuery("SELECT approx_distinct(CAST((orderdate) AS TIMESTAMP WITH TIME ZONE)) FROM orders", "SELECT 2384");
-        assertQuery("SELECT approx_distinct(CAST((orderdate) AS TIMESTAMP WITH TIME ZONE), 0.023) FROM orders", "SELECT 2384");
+        assertQuery("SELECT approx_distinct(CAST(orderdate AS TIMESTAMP WITH TIME ZONE)) FROM orders", "SELECT 2347");
+        assertQuery("SELECT approx_distinct(CAST(orderdate AS TIMESTAMP WITH TIME ZONE), 0.023) FROM orders", "SELECT 2347");
 
         // test time
-        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME)) FROM orders", "SELECT 993");
-        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME), 0.023) FROM orders", "SELECT 993");
+        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME)) FROM orders", "SELECT 996");
+        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME), 0.023) FROM orders", "SELECT 996");
 
         // test time with time zone
-        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME WITH TIME ZONE)) FROM orders", "SELECT 993");
-        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME WITH TIME ZONE), 0.023) FROM orders", "SELECT 993");
+        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME WITH TIME ZONE)) FROM orders", "SELECT 996");
+        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME WITH TIME ZONE), 0.023) FROM orders", "SELECT 996");
 
         // test short decimal
         assertQuery("SELECT approx_distinct(CAST(custkey AS DECIMAL(18, 0))) FROM orders", "SELECT 990");
@@ -716,9 +751,55 @@ public abstract class AbstractTestAggregations
         assertQuery("SELECT approx_distinct(CAST(custkey AS VARCHAR)) FROM orders", "SELECT 1036");
         assertQuery("SELECT approx_distinct(CAST(custkey AS VARCHAR), 0.023) FROM orders", "SELECT 1036");
 
+        // test char
+        assertQuery("SELECT approx_distinct(CAST(CAST(custkey AS VARCHAR) AS CHAR(20))) FROM orders", "SELECT 1036");
+        assertQuery("SELECT approx_distinct(CAST(CAST(custkey AS VARCHAR) AS CHAR(20)), 0.023) FROM orders", "SELECT 1036");
+
         // test varbinary
         assertQuery("SELECT approx_distinct(to_utf8(CAST(custkey AS VARCHAR))) FROM orders", "SELECT 1036");
         assertQuery("SELECT approx_distinct(to_utf8(CAST(custkey AS VARCHAR)), 0.023) FROM orders", "SELECT 1036");
+    }
+
+    @Test
+    public void testSumDataSizeForStats()
+    {
+        // varchar
+        assertQuery("SELECT \"$internal$sum_data_size_for_stats\"(comment) FROM orders", "SELECT sum(length(comment)) FROM orders");
+
+        // char
+        // Presto removes trailing whitespaces when casting to CHAR.
+        // Hard code the expected data size since there is no easy to way to compute it in H2.
+        assertQuery("SELECT \"$internal$sum_data_size_for_stats\"(CAST(comment AS CHAR(1000))) FROM orders", "SELECT 725468");
+
+        // varbinary
+        assertQuery("SELECT \"$internal$sum_data_size_for_stats\"(CAST(comment AS VARBINARY)) FROM orders", "SELECT sum(length(comment)) FROM orders");
+
+        // array
+        assertQuery("SELECT \"$internal$sum_data_size_for_stats\"(ARRAY[comment]) FROM orders", "SELECT sum(length(comment)) FROM orders");
+        assertQuery("SELECT \"$internal$sum_data_size_for_stats\"(ARRAY[comment, comment]) FROM orders", "SELECT 2 * sum(length(comment)) FROM orders");
+
+        // map
+        assertQuery("SELECT \"$internal$sum_data_size_for_stats\"(map(ARRAY[1], ARRAY[comment])) FROM orders", "SELECT 4 * count(*) + sum(length(comment)) FROM orders");
+        assertQuery("SELECT \"$internal$sum_data_size_for_stats\"(map(ARRAY[1, 2], ARRAY[comment, comment])) FROM orders", "SELECT 2 * 4 * count(*) + 2 * sum(length(comment)) FROM orders");
+
+        // row
+        assertQuery("SELECT \"$internal$sum_data_size_for_stats\"(ROW(comment)) FROM orders", "SELECT sum(length(comment)) FROM orders");
+        assertQuery("SELECT \"$internal$sum_data_size_for_stats\"(ROW(comment, comment)) FROM orders", "SELECT 2 * sum(length(comment)) FROM orders");
+    }
+
+    @Test
+    public void testMaxDataSizeForStats()
+    {
+        // varchar
+        assertQuery("SELECT \"$internal$max_data_size_for_stats\"(comment) FROM orders", "SELECT max(length(comment)) FROM orders");
+
+        // char
+        assertQuery("SELECT \"$internal$max_data_size_for_stats\"(CAST(comment AS CHAR(1000))) FROM orders", "SELECT max(length(comment)) FROM orders");
+
+        // varbinary
+        assertQuery("SELECT \"$internal$max_data_size_for_stats\"(CAST(comment AS VARBINARY)) FROM orders", "SELECT max(length(comment)) FROM orders");
+
+        // $internal$max_data_size_for_stats is not needed for array, map and row
     }
 
     @Test
@@ -1200,5 +1281,74 @@ public abstract class AbstractTestAggregations
                         "('5-LOW', 1369, ('O'))," +
                         "('5-LOW', 445 , NULL)," +
                         "('1-URGENT', 781 , ('O'))");
+    }
+
+    /**
+     * Comprehensive correctness testing is done in the TestQuantileDigestAggregationFunction
+     */
+    @Test
+    public void testQuantileDigest()
+    {
+        assertQuery("SELECT value_at_quantile(qdigest_agg(orderkey), 0.5E0) > 0 FROM lineitem", "SELECT true");
+        assertQuery("SELECT value_at_quantile(qdigest_agg(quantity), 0.5E0) > 0 FROM lineitem", "SELECT true");
+        assertQuery("SELECT value_at_quantile(qdigest_agg(CAST(quantity AS REAL)), 0.5E0) > 0 FROM lineitem", "SELECT true");
+        assertQuery("SELECT value_at_quantile(qdigest_agg(orderkey, 2), 0.5E0) > 0 FROM lineitem", "SELECT true");
+        assertQuery("SELECT value_at_quantile(qdigest_agg(quantity, 3), 0.5E0) > 0 FROM lineitem", "SELECT true");
+        assertQuery("SELECT value_at_quantile(qdigest_agg(CAST(quantity AS REAL), 4), 0.5E0) > 0 FROM lineitem", "SELECT true");
+        assertQuery("SELECT value_at_quantile(qdigest_agg(orderkey, 2, 0.0001E0), 0.5E0) > 0 FROM lineitem", "SELECT true");
+        assertQuery("SELECT value_at_quantile(qdigest_agg(quantity, 3, 0.0001E0), 0.5E0) > 0 FROM lineitem", "SELECT true");
+        assertQuery("SELECT value_at_quantile(qdigest_agg(CAST(quantity AS REAL), 4, 0.0001E0), 0.5E0) > 0 FROM lineitem", "SELECT true");
+    }
+
+    /**
+     * Comprehensive correctness testing is done in the TestQuantileDigestAggregationFunction
+     */
+    @Test
+    public void testQuantileDigestGroupBy()
+    {
+        assertQuery("SELECT partkey, value_at_quantile(qdigest_agg(orderkey), 0.5E0) > 0 FROM lineitem GROUP BY partkey", "SELECT partkey, true FROM lineitem GROUP BY partkey");
+        assertQuery("SELECT partkey, value_at_quantile(qdigest_agg(quantity), 0.5E0) > 0 FROM lineitem GROUP BY partkey", "SELECT partkey, true FROM lineitem GROUP BY partkey");
+        assertQuery("SELECT partkey, value_at_quantile(qdigest_agg(CAST(quantity AS REAL)), 0.5E0) > 0 FROM lineitem GROUP BY partkey", "SELECT partkey, true FROM lineitem GROUP BY partkey");
+        assertQuery("SELECT partkey, value_at_quantile(qdigest_agg(orderkey, 2), 0.5E0) > 0 FROM lineitem GROUP BY partkey", "SELECT partkey, true FROM lineitem GROUP BY partkey");
+        assertQuery("SELECT partkey, value_at_quantile(qdigest_agg(quantity, 3), 0.5E0) > 0 FROM lineitem GROUP BY partkey", "SELECT partkey, true FROM lineitem GROUP BY partkey");
+        assertQuery("SELECT partkey, value_at_quantile(qdigest_agg(CAST(quantity AS REAL), 4), 0.5E0) > 0 FROM lineitem GROUP BY partkey", "SELECT partkey, true FROM lineitem GROUP BY partkey");
+        assertQuery("SELECT partkey, value_at_quantile(qdigest_agg(orderkey, 2, 0.0001E0), 0.5E0) > 0 FROM lineitem GROUP BY partkey", "SELECT partkey, true FROM lineitem GROUP BY partkey");
+        assertQuery("SELECT partkey, value_at_quantile(qdigest_agg(quantity, 3, 0.0001E0), 0.5E0) > 0 FROM lineitem GROUP BY partkey", "SELECT partkey, true FROM lineitem GROUP BY partkey");
+        assertQuery("SELECT partkey, value_at_quantile(qdigest_agg(CAST(quantity AS REAL), 4, 0.0001E0), 0.5E0) > 0 FROM lineitem GROUP BY partkey", "SELECT partkey, true FROM lineitem GROUP BY partkey");
+    }
+
+    /**
+     * Comprehensive correctness testing is done in the TestMergeQuantileDigestFunction
+     */
+    @Test
+    public void testQuantileDigestMerge()
+    {
+        assertQuery("SELECT value_at_quantile(merge(qdigest), 0.5E0) > 0 FROM (SELECT partkey, qdigest_agg(orderkey) as qdigest FROM lineitem GROUP BY partkey)", "SELECT true");
+    }
+
+    /**
+     * Comprehensive correctness testing is done in the TestMergeQuantileDigestFunction
+     */
+    @Test
+    public void testQuantileDigestMergeGroupBy()
+    {
+        assertQuery("" +
+                        "SELECT partkey, value_at_quantile(merge(qdigest), 0.5E0) > 0 " +
+                        "FROM (SELECT partkey, suppkey, qdigest_agg(orderkey) as qdigest FROM lineitem GROUP BY partkey, suppkey)" +
+                        "GROUP BY partkey",
+                "SELECT partkey, true FROM lineitem GROUP BY partkey");
+    }
+
+    @Test
+    public void testGroupedRow()
+    {
+        assertQuery(
+                "SELECT count(r[1]), count(r[2]) " +
+                        "FROM (" +
+                        "   SELECT orderkey, max_by(ROW(orderstatus, shippriority), orderstatus) AS r " +
+                        "   FROM orders " +
+                        "   GROUP BY orderkey" +
+                        ")",
+                "SELECT 15000, 15000");
     }
 }

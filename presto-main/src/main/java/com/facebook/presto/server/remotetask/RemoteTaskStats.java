@@ -13,8 +13,9 @@
  */
 package com.facebook.presto.server.remotetask;
 
-import com.google.common.util.concurrent.AtomicDouble;
+import io.airlift.stats.DistributionStat;
 import org.weakref.jmx.Managed;
+import org.weakref.jmx.Nested;
 
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -24,6 +25,7 @@ public class RemoteTaskStats
     private final IncrementalAverage infoRoundTripMillis = new IncrementalAverage();
     private final IncrementalAverage statusRoundTripMillis = new IncrementalAverage();
     private final IncrementalAverage responseSizeBytes = new IncrementalAverage();
+    private final DistributionStat updateWithPlanBytes = new DistributionStat();
 
     private long requestSuccess;
     private long requestFailure;
@@ -56,6 +58,11 @@ public class RemoteTaskStats
     public void updateFailure()
     {
         requestFailure++;
+    }
+
+    public void updateWithPlanBytes(long bytes)
+    {
+        updateWithPlanBytes.add(bytes);
     }
 
     @Managed
@@ -94,22 +101,28 @@ public class RemoteTaskStats
         return requestFailure;
     }
 
+    @Managed
+    @Nested
+    public DistributionStat getUpdateWithPlanBytes()
+    {
+        return updateWithPlanBytes;
+    }
+
     @ThreadSafe
     private static class IncrementalAverage
     {
         private long count;
-        private final AtomicDouble average = new AtomicDouble();
+        private volatile double average;
 
         synchronized void add(long value)
         {
             count++;
-            double oldAverage = average.get();
-            average.set(oldAverage + ((value - oldAverage) / count));
+            average = average + (value - average) / count;
         }
 
         double get()
         {
-            return average.get();
+            return average;
         }
     }
 }

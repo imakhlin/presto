@@ -64,6 +64,7 @@ public class LongColumnWriter
     private final PresentOutputStream presentStream;
 
     private final List<ColumnStatistics> rowGroupColumnStatistics = new ArrayList<>();
+    private long columnStatisticsRetainedSizeInBytes;
 
     private final Supplier<LongValueStatisticsBuilder> statisticsBuilderSupplier;
     private LongValueStatisticsBuilder statisticsBuilder;
@@ -129,6 +130,7 @@ public class LongColumnWriter
         checkState(!closed);
         ColumnStatistics statistics = statisticsBuilder.buildColumnStatistics();
         rowGroupColumnStatistics.add(statistics);
+        columnStatisticsRetainedSizeInBytes += statistics.getRetainedSizeInBytes();
         statisticsBuilder = statisticsBuilderSupplier.get();
         return ImmutableMap.of(column, statistics);
     }
@@ -203,8 +205,7 @@ public class LongColumnWriter
     @Override
     public long getRetainedBytes()
     {
-        // NOTE: we do not include stats because they should be small and it would be annoying to calculate the size
-        return INSTANCE_SIZE + dataStream.getRetainedBytes() + presentStream.getRetainedBytes();
+        return INSTANCE_SIZE + dataStream.getRetainedBytes() + presentStream.getRetainedBytes() + columnStatisticsRetainedSizeInBytes;
     }
 
     @Override
@@ -214,6 +215,7 @@ public class LongColumnWriter
         dataStream.reset();
         presentStream.reset();
         rowGroupColumnStatistics.clear();
+        columnStatisticsRetainedSizeInBytes = 0;
         statisticsBuilder = statisticsBuilderSupplier.get();
     }
 }
