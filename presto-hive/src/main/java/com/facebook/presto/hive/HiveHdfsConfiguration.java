@@ -25,7 +25,6 @@ import javax.crypto.spec.SecretKeySpec;
 import javax.inject.Inject;
 
 import java.net.URI;
-import java.util.Set;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.Principal;
@@ -35,6 +34,7 @@ import java.security.spec.KeySpec;
 import java.util.Base64;
 import java.util.NoSuchElementException;
 import java.util.Optional;
+import java.util.Set;
 
 import static com.facebook.presto.hive.util.ConfigurationUtils.copy;
 import static com.facebook.presto.hive.util.ConfigurationUtils.getInitialConfiguration;
@@ -230,6 +230,5 @@ public class HiveHdfsConfiguration
                 return cipher;
             }
         }
-        return config;
     }
 }
