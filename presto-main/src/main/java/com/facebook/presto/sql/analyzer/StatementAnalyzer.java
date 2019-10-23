@@ -1913,12 +1913,18 @@ class StatementAnalyzer
         private RelationType analyzeView(Query query, QualifiedObjectName name, Optional<String> catalog, Optional<String> schema, Optional<String> owner, Table node)
         {
             try {
+                boolean identifyWithSession = true; // TODO: make configurable. Consider using system properties or Presto configuration file
                 // run view as view owner if set; otherwise, run as session user
                 Identity identity;
                 AccessControl viewAccessControl;
                 if (owner.isPresent() && !owner.get().equals(session.getIdentity().getUser())) {
-                    identity = new Identity(owner.get(), Optional.empty());
-                    viewAccessControl = new ViewAccessControl(accessControl);
+                    if (identifyWithSession) {
+                        identity = session.getIdentity();
+                        viewAccessControl = accessControl;
+                    } else {
+                        identity = new Identity(owner.get(), Optional.empty());
+                        viewAccessControl = new ViewAccessControl(accessControl);
+                    }
                 }
                 else {
                     identity = session.getIdentity();
