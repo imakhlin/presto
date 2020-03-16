@@ -1,6 +1,20 @@
+/*
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package com.facebook.presto.plugin.oracle;
 
-import com.facebook.presto.plugin.jdbc.*;
+import com.facebook.presto.plugin.jdbc.ReadMapping;
+import com.facebook.presto.plugin.jdbc.StandardReadMappings;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.type.DecimalType;
 import com.facebook.presto.spi.type.Decimals;
@@ -15,12 +29,14 @@ import static com.facebook.presto.plugin.jdbc.StandardReadMappings.integerReadMa
 import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertThrows;
+
 public class TestOracleNumberHandling
 {
     // TODO test type-limit-exceed IGNORE, VARCHAR, FAIL
     // TODO test that scale >= precision, set precision to MAX_PRECISION
     //
-    @Test void testReadMapCompare()
+    @Test
+    void testReadMapCompare()
     {
         DecimalType type1 = createDecimalType(Decimals.MAX_PRECISION, 2);
         ReadMapping read1 = OracleReadMappings.roundDecimalReadMapping(type1, RoundingMode.UP);
@@ -38,7 +54,8 @@ public class TestOracleNumberHandling
         TestOracleReadMappings.assertReadMappingNotEquals(read4, read5);
     }
 
-    @Test void testScaleSettingsConflict()
+    @Test
+    void testScaleSettingsConflict()
     {
         OracleConfig config = new OracleConfig();
         config.setNumberDecimalDefaultScaleFixed(OracleConfig.UNDEFINED_SCALE);
@@ -48,7 +65,8 @@ public class TestOracleNumberHandling
         assertThrows(PrestoException.class, () -> config.setNumberDecimalDefaultScaleRatio(0.3f));
     }
 
-    @Test void testOracleRoundingModeThrows()
+    @Test
+    void testOracleRoundingModeThrows()
     {
         OracleConfig config = new OracleConfig();
         config.setNumberExceedsLimitsMode("ROUND");
@@ -69,6 +87,7 @@ public class TestOracleNumberHandling
         numberHandling = buildNumberHandling(Decimals.MAX_PRECISION, 2, config);
         assertEquals(numberHandling.getMapToType(), JDBCType.DECIMAL);
     }
+
     @Test
     public void testDecimalMappingRatio()
     {
@@ -125,7 +144,7 @@ public class TestOracleNumberHandling
         expectedScale = (int) (ratioScale * (float) Decimals.MAX_PRECISION);
         numberHandling = buildNumberHandling(precision, Decimals.MAX_PRECISION + 1, config);
         readExpected = OracleReadMappings.roundDecimalReadMapping(
-                createDecimalType(Decimals.MAX_PRECISION,  expectedScale),
+                createDecimalType(Decimals.MAX_PRECISION, expectedScale),
                 round);
         TestOracleReadMappings.assertReadMappingEquals(readExpected, numberHandling.getReadMapping());
     }
@@ -182,7 +201,8 @@ public class TestOracleNumberHandling
         TestOracleReadMappings.assertReadMappingEquals(readExpected, numberHandling.getReadMapping());
     }
 
-    @Test void testDecimalZeroScaleAsInteger()
+    @Test
+    void testDecimalZeroScaleAsInteger()
     {
         OracleConfig config = buildConfig();
         OracleNumberHandling numberHandling = buildNumberHandling(Decimals.MAX_PRECISION, 0, config);
@@ -191,7 +211,8 @@ public class TestOracleNumberHandling
         TestOracleReadMappings.assertReadMappingEquals(readExpected, numberHandling.getReadMapping());
     }
 
-    @Test void testDecimalNullScaleAsDecimalWithFixed()
+    @Test
+    void testDecimalNullScaleAsDecimalWithFixed()
     {
         int fixedScale = 8;
 
@@ -214,7 +235,8 @@ public class TestOracleNumberHandling
         assertEquals(decType.getPrecision(), Decimals.MAX_PRECISION);
     }
 
-    @Test void testDecimalNullScaleAsDecimalWithRatio()
+    @Test
+    void testDecimalNullScaleAsDecimalWithRatio()
     {
         float ratioScale = 0.3f;
         int expectedScale = (int) ((float) Decimals.MAX_PRECISION * ratioScale);
@@ -246,7 +268,8 @@ public class TestOracleNumberHandling
         return numberHandling;
     }
 
-    private OracleConfig buildConfig() {
+    private OracleConfig buildConfig()
+    {
         OracleConfig config = new OracleConfig()
                 .setNumberExceedsLimitsMode("ROUND")
                 .setNumberTypeDefault("DECIMAL")
@@ -256,5 +279,4 @@ public class TestOracleNumberHandling
                 .setNumberDecimalDefaultScaleFixed(8);
         return config;
     }
-
 }

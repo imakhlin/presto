@@ -16,11 +16,11 @@ package com.facebook.presto.plugin.oracle;
 import com.facebook.presto.plugin.jdbc.JdbcClient;
 import com.facebook.presto.plugin.jdbc.JdbcColumnHandle;
 import com.facebook.presto.plugin.jdbc.JdbcSplit;
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordSet;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
-import com.facebook.presto.spi.ConnectorSession;
 
 import java.util.List;
 
@@ -28,9 +28,9 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * OracleRecordSet
- *
+ * <p>
  * justification:
- *  Needed to return a custom OracleRecordCursor
+ * Needed to return a custom OracleRecordCursor
  */
 public class OracleRecordSet
         implements RecordSet

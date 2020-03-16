@@ -1,45 +1,25 @@
 <?xml version="1.0"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://maven.apache.org/POM/4.0.0" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.facebook.presto.oracle</groupId>
-    <artifactId>presto-oracle</artifactId>
-    <description>Presto - Oracle Connector</description>
-    <packaging>jar</packaging>
-    <version>0.225</version>
-
-    <!--parent>
+    <parent>
         <groupId>com.facebook.presto</groupId>
         <artifactId>presto-root</artifactId>
-        <version>0.225</version>
-    </parent-->
+        <version>0.226</version>
+    </parent>
 
-    <!-- Normally these parameters would be used to create a Plugin inside of Presto
-         however we're going to make a stand-alone plugin that will be included separately -->
-    <!--artifactId>presto-oracle</artifactId>
+    <artifactId>presto-oracle</artifactId>
     <description>Presto - Oracle Connector</description>
-    <packaging>presto-plugin</packaging-->
+    <packaging>presto-plugin</packaging>
 
-    <!--properties>
-        <air.main.basedir>${project.parent.basedir}</air.main.basedir>
-    </properties -->
-
-    <!-- These versions were determined from the 0.225 Presto POM.xml dependency versions -->
     <properties>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.target>1.8</maven.compiler.target>
-        <maven.compiler.source>1.8</maven.compiler.source>
-
-        <dep.presto.version>0.225</dep.presto.version>
-        <dep.airlift.version>0.178</dep.airlift.version>
-        <dep.slice.version>0.36</dep.slice.version>
+        <air.main.basedir>${project.parent.basedir}</air.main.basedir>
     </properties>
 
     <dependencies>
         <dependency>
             <groupId>com.facebook.presto</groupId>
             <artifactId>presto-base-jdbc</artifactId>
-            <version>${dep.presto.version}</version>
         </dependency>
 
         <dependency>
@@ -72,19 +52,13 @@
             <groupId>com.oracle.jdbc</groupId>
             <artifactId>ojdbc8</artifactId>
             <version>12.2.0.1</version>
-            <scope>provided</scope>
+            <scope>compile</scope>
         </dependency>
 
         <dependency>
             <groupId>javax.inject</groupId>
             <artifactId>javax.inject</artifactId>
             <version>1</version>
-        </dependency>
-
-        <dependency>
-            <groupId>joda-time</groupId>
-            <artifactId>joda-time</artifactId>
-            <version>2.10</version>
         </dependency>
 
         <dependency>
@@ -104,7 +78,6 @@
             <groupId>com.facebook.presto</groupId>
             <artifactId>presto-spi</artifactId>
             <scope>provided</scope>
-            <version>${dep.presto.version}</version>
         </dependency>
 
         <dependency>
@@ -125,7 +98,6 @@
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-annotations</artifactId>
             <scope>provided</scope>
-            <version>2.9.0</version>
         </dependency>
 
         <!-- for testing -->
@@ -154,14 +126,12 @@
             <groupId>com.facebook.presto</groupId>
             <artifactId>presto-main</artifactId>
             <scope>test</scope>
-            <version>${dep.presto.version}</version>
         </dependency>
 
         <dependency>
             <groupId>com.facebook.presto</groupId>
             <artifactId>presto-tpch</artifactId>
             <scope>test</scope>
-            <version>${dep.presto.version}</version>
         </dependency>
 
         <dependency>
@@ -175,7 +145,6 @@
             <groupId>com.facebook.presto</groupId>
             <artifactId>presto-tests</artifactId>
             <scope>test</scope>
-            <version>${dep.presto.version}</version>
         </dependency>
 
         <dependency>

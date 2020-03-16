@@ -13,13 +13,22 @@
  */
 package com.facebook.presto.plugin.oracle;
 
-import com.facebook.presto.plugin.jdbc.*;
-import io.airlift.log.Logger;
+import com.facebook.presto.plugin.jdbc.BooleanReadFunction;
+import com.facebook.presto.plugin.jdbc.DoubleReadFunction;
+import com.facebook.presto.plugin.jdbc.JdbcClient;
+import com.facebook.presto.plugin.jdbc.JdbcColumnHandle;
+import com.facebook.presto.plugin.jdbc.JdbcIdentity;
+import com.facebook.presto.plugin.jdbc.JdbcSplit;
+import com.facebook.presto.plugin.jdbc.LongReadFunction;
+import com.facebook.presto.plugin.jdbc.ReadFunction;
+import com.facebook.presto.plugin.jdbc.ReadMapping;
+import com.facebook.presto.plugin.jdbc.SliceReadFunction;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.base.VerifyException;
+import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 
 import java.sql.Connection;
@@ -37,9 +46,9 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Custom RecordCursor
- *
+ * <p>
  * justification:
- *  overrides getObject() to provide an implementation
+ * overrides getObject() to provide an implementation
  */
 public class OracleRecordCursor
         implements RecordCursor
@@ -220,8 +229,8 @@ public class OracleRecordCursor
 
         // use try with resources to close everything properly
         try (Connection connection = this.connection;
-             Statement statement = this.statement;
-             ResultSet resultSet = this.resultSet) {
+                Statement statement = this.statement;
+                ResultSet resultSet = this.resultSet) {
             jdbcClient.abortReadConnection(connection);
         }
         catch (SQLException e) {

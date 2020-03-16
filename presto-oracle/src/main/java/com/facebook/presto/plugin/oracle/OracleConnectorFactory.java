@@ -13,12 +13,6 @@
  */
 package com.facebook.presto.plugin.oracle;
 
-import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
-import java.io.InputStream;
-import java.io.FileInputStream;
-import java.security.MessageDigest;
 import com.facebook.presto.plugin.jdbc.JdbcHandleResolver;
 import com.facebook.presto.spi.ConnectorHandleResolver;
 import com.facebook.presto.spi.classloader.ThreadContextClassLoader;
@@ -33,9 +27,17 @@ import com.google.inject.Injector;
 import com.google.inject.Module;
 import io.airlift.bootstrap.Bootstrap;
 import io.airlift.log.Logger;
-import static com.google.common.base.Throwables.throwIfUnchecked;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.security.MessageDigest;
+import java.util.HashMap;
+import java.util.Map;
+
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Strings.isNullOrEmpty;
+import static com.google.common.base.Throwables.throwIfUnchecked;
 import static java.util.Objects.requireNonNull;
 
 public class OracleConnectorFactory
@@ -43,12 +45,11 @@ public class OracleConnectorFactory
 {
     private static final Logger LOG = Logger.get(OracleConnectorFactory.class);
     private final String name;
-    private final String ORACLE_IMPORT_TEST = "oracle.jdbc.OracleDriver";
-    // ORACLE_IMPORT_PROP - use to override ORACLE_IMPORT_TEST value
-    private final String ORACLE_IMPORT_PROP = "com.facebook.presto.plugin.oracle.ImportTest";
+    private final String oracleImportTest = "oracle.jdbc.OracleDriver";
+    // oracleImportProp - use to override oracleImportTest value
+    private final String oracleImportProp = "com.facebook.presto.plugin.oracle.ImportTest";
     private final Module module;
     private final ClassLoader classLoader;
-
 
     public OracleConnectorFactory(String name, Module module, ClassLoader classLoader)
     {
@@ -56,6 +57,39 @@ public class OracleConnectorFactory
         this.name = name;
         this.module = requireNonNull(module, "module is null");
         this.classLoader = requireNonNull(classLoader, "classLoader is null");
+    }
+
+    private static String createChecksum(String filename)
+            throws Exception
+    {
+        InputStream fis = new FileInputStream(filename);
+        try {
+            byte[] buffer = new byte[1024 * 10];
+            MessageDigest complete = MessageDigest.getInstance("SHA-1");
+            int numRead;
+
+            do {
+                numRead = fis.read(buffer);
+                if (numRead > 0) {
+                    complete.update(buffer, 0, numRead);
+                }
+            }
+            while (numRead != -1);
+
+            // convert the sha1 hash to HEX
+            byte[] hashBytes = complete.digest();
+            String hashHex = HashCode.fromBytes(hashBytes).toString();
+            return hashHex;
+        }
+        finally {
+            // close the input stream quietly
+            try {
+                if (fis != null) {
+                    fis.close();
+                }
+            }
+            catch (IOException ex) { }
+        }
     }
 
     @Override
@@ -81,7 +115,6 @@ public class OracleConnectorFactory
 
         // based off of JdbcConnectorFactory
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-
             Bootstrap app = new Bootstrap(
                     binder -> {
                         binder.bind(FunctionMetadataManager.class).toInstance(context.getFunctionMetadataManager());
@@ -110,15 +143,16 @@ public class OracleConnectorFactory
      * If it's not present raise a useful error.
      * If it is present, inform the user which JAR they've provided via its SHA1 hash.
      */
-    private void requireOracleDriver() {
-        String overrideImport = System.getProperty(ORACLE_IMPORT_PROP);
-        String oracleImport = ORACLE_IMPORT_TEST;
+    private void requireOracleDriver()
+    {
+        String overrideImport = System.getProperty(oracleImportProp);
+        String oracleImport = oracleImportTest;
 
         if (overrideImport != null && !overrideImport.isEmpty()) {
             oracleImport = overrideImport;
         }
 
-        Map<String,String> oracleDriverHashes = new HashMap<>();
+        Map<String, String> oracleDriverHashes = new HashMap<>();
         oracleDriverHashes.put("a483a046eee2f404d864a6ff5b09dc0e1be3fe6c", "11.2.0.4 (11g Release 2)"); // JDK 6-8
         oracleDriverHashes.put("5543067223760fc2277fe3f603d8c4630927679c", "11.2.0.4 (11g Release 2)"); // JDK 5
         oracleDriverHashes.put("a2348e4944956fac05235f7cd5d30bf872afb157", "12.1.0.1 (12c Release 1)"); // JDK 7-8
@@ -136,10 +170,11 @@ public class OracleConnectorFactory
             generic = Class.forName(oracleImport, false, this.getClass().getClassLoader());
             jarFile = generic.getProtectionDomain().getCodeSource().getLocation().getPath();
             LOG.info("Oracle JDBC driver loaded from '%s'", jarFile);
-        } catch (ClassNotFoundException ex) {
+        }
+        catch (ClassNotFoundException ex) {
             String msg = String.format("Oracle JDBC driver not found, unable to load class '%s'%n"
-                        + "Oracle Plugin JAR files can be downloaded from https://www.oracle.com/database/technologies/appdev/jdbc-downloads.html%n"
-                        + "JAR files should be placed in the presto plugin directory", oracleImport);
+                    + "Oracle Plugin JAR files can be downloaded from https://www.oracle.com/database/technologies/appdev/jdbc-downloads.html%n"
+                    + "JAR files should be placed in the presto plugin directory", oracleImport);
             RuntimeException ex2 = new RuntimeException(msg);
             ex2.initCause(ex);
             LOG.error(ex2);
@@ -149,32 +184,9 @@ public class OracleConnectorFactory
             String jarSha1 = createChecksum(jarFile);
             String jarVersion = oracleDriverHashes.getOrDefault(jarSha1, "unknown");
             LOG.info("Oracle Driver: %s, sha1: %s", jarVersion, jarSha1);
-        } catch (Exception ex) {
-            LOG.info("Unable to check Oracle JAR Version: %s", ex.toString());
         }
-    }
-
-    private static String createChecksum(String filename) throws Exception {
-        InputStream fis =  new FileInputStream(filename);
-        try {
-            byte[] buffer = new byte[1024 * 10];
-            MessageDigest complete = MessageDigest.getInstance("SHA-1");
-            int numRead;
-
-            do {
-                numRead = fis.read(buffer);
-                if (numRead > 0) {
-                    complete.update(buffer, 0, numRead);
-                }
-            } while (numRead != -1);
-
-            // convert the sha1 hash to HEX
-            byte[] hashBytes = complete.digest();
-            String hashHex = HashCode.fromBytes(hashBytes).toString();
-            return hashHex;
-        } finally {
-            // close the input stream quietly
-            try {if (fis != null) fis.close();} catch(IOException ex) {}
+        catch (Exception ex) {
+            LOG.info("Unable to check Oracle JAR Version: %s", ex.toString());
         }
     }
 }

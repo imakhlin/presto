@@ -13,8 +13,20 @@
  */
 package com.facebook.presto.plugin.oracle;
 
-import com.facebook.presto.plugin.jdbc.*;
-import com.facebook.presto.spi.*;
+import com.facebook.presto.plugin.jdbc.BaseJdbcClient;
+import com.facebook.presto.plugin.jdbc.BaseJdbcConfig;
+import com.facebook.presto.plugin.jdbc.DriverConnectionFactory;
+import com.facebook.presto.plugin.jdbc.JdbcColumnHandle;
+import com.facebook.presto.plugin.jdbc.JdbcConnectorId;
+import com.facebook.presto.plugin.jdbc.JdbcIdentity;
+import com.facebook.presto.plugin.jdbc.JdbcTableHandle;
+import com.facebook.presto.plugin.jdbc.JdbcTypeHandle;
+import com.facebook.presto.plugin.jdbc.ReadMapping;
+import com.facebook.presto.plugin.jdbc.StandardReadMappings;
+import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.StandardErrorCode;
+import com.facebook.presto.spi.TableNotFoundException;
 import com.facebook.presto.spi.type.VarcharType;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -22,14 +34,21 @@ import io.airlift.log.Logger;
 import oracle.jdbc.OracleDriver;
 
 import javax.inject.Inject;
-import java.sql.*;
+
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
 import static com.facebook.presto.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
-import static com.facebook.presto.plugin.jdbc.StandardReadMappings.*;
+import static com.facebook.presto.plugin.jdbc.StandardReadMappings.timestampReadMapping;
+import static com.facebook.presto.plugin.jdbc.StandardReadMappings.varcharReadMapping;
 import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
 import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
 import static java.sql.ResultSetMetaData.columnNullable;
@@ -55,6 +74,17 @@ public class OracleClient
         this.oracleConfig = oracleConfig;
     }
 
+    private static ResultSet getColumns(JdbcTableHandle tableHandle, DatabaseMetaData metadata)
+            throws SQLException
+    {
+        Optional<String> escape = Optional.ofNullable(metadata.getSearchStringEscape());
+        return metadata.getColumns(
+                tableHandle.getCatalogName(),
+                escapeNamePattern(Optional.ofNullable(tableHandle.getSchemaName()), escape).orElse(null),
+                escapeNamePattern(Optional.ofNullable(tableHandle.getTableName()), escape).orElse(null),
+                null);
+    }
+
     @Override
     /**
      * SELECT distinct(owner) AS DATABASE_SCHEM FROM SYS.ALL_SYNONYMS;
@@ -67,7 +97,7 @@ public class OracleClient
             while (resultSet.next()) {
                 // Schema Names are in "TABLE_SCHEM" for Oracle
                 String schemaName = resultSet.getString(META_DB_NAME_FIELD);
-                if(schemaName == null) {
+                if (schemaName == null) {
                     LOG.error("connection.getMetaData().getSchemas() returned null schema name");
                     continue;
                 }
@@ -84,17 +114,19 @@ public class OracleClient
         }
 
         // Merge schema synonyms with all schema names.
-        if(oracleConfig.isSynonymsEnabled()) {
+        if (oracleConfig.isSynonymsEnabled()) {
             try {
                 schemaNames.addAll(listSchemaSynonyms(connection));
-            } catch (PrestoException ex2) {
+            }
+            catch (PrestoException ex2) {
                 LOG.error(ex2);
             }
         }
         return schemaNames.build();
     }
 
-    private Collection<String> listSchemaSynonyms(Connection connection) {
+    private Collection<String> listSchemaSynonyms(Connection connection)
+    {
         ImmutableSet.Builder<String> schemaSynonyms = ImmutableSet.builder();
         try {
             Statement stmt = connection.createStatement();
@@ -103,30 +135,13 @@ public class OracleClient
                 String schemaSynonym = resultSet.getString(META_DB_NAME_FIELD);
                 schemaSynonyms.add(schemaSynonym);
             }
-        } catch (SQLException e) {
+        }
+        catch (SQLException e) {
             throw new PrestoException(
                     JDBC_ERROR, String.format("Failed retrieving schema synonyms, query was: %s", QUERY_SCHEMA_SYNS));
         }
 
         return schemaSynonyms.build();
-    }
-
-    @Override
-    /**
-     * Retrieve information about tables/views using the JDBC Drivers DatabaseMetaData api,
-     * Include "SYNONYM" - functionality specific to Oracle
-     */
-    protected ResultSet getTables(Connection connection, Optional<String> schemaName, Optional<String> tableName)
-            throws SQLException
-    {
-        // Exactly like the parent class, except we include "SYNONYM" - specific to Oracle
-        DatabaseMetaData metadata = connection.getMetaData();
-        Optional<String> escape = Optional.ofNullable(metadata.getSearchStringEscape());
-        return metadata.getTables(
-                connection.getCatalog(),
-                escapeNamePattern(schemaName, escape).orElse(null),
-                escapeNamePattern(tableName, escape).orElse(null),
-                new String[] {"TABLE", "VIEW", "SYNONYM", "GLOBAL TEMPORARY", "LOCAL TEMPORARY"});
     }
 
     /*
@@ -164,6 +179,24 @@ public class OracleClient
     }
      */
 
+    @Override
+    /**
+     * Retrieve information about tables/views using the JDBC Drivers DatabaseMetaData api,
+     * Include "SYNONYM" - functionality specific to Oracle
+     */
+    protected ResultSet getTables(Connection connection, Optional<String> schemaName, Optional<String> tableName)
+            throws SQLException
+    {
+        // Exactly like the parent class, except we include "SYNONYM" - specific to Oracle
+        DatabaseMetaData metadata = connection.getMetaData();
+        Optional<String> escape = Optional.ofNullable(metadata.getSearchStringEscape());
+        return metadata.getTables(
+                connection.getCatalog(),
+                escapeNamePattern(schemaName, escape).orElse(null),
+                escapeNamePattern(tableName, escape).orElse(null),
+                new String[] {"TABLE", "VIEW", "SYNONYM", "GLOBAL TEMPORARY", "LOCAL TEMPORARY"});
+    }
+
     protected String getTableSchemaName(ResultSet resultSet)
             throws SQLException
     {
@@ -174,7 +207,7 @@ public class OracleClient
     public List<JdbcColumnHandle> getColumns(ConnectorSession session, JdbcTableHandle tableHandle)
     {
         try (Connection connection = connectionFactory.openConnection(JdbcIdentity.from(session))) {
-            if(oracleConfig.isSynonymsEnabled()) {
+            if (oracleConfig.isSynonymsEnabled()) {
                 ((oracle.jdbc.driver.OracleConnection) connection).setIncludeSynonyms(true);
             }
             try (ResultSet resultSet = getColumns(tableHandle, connection.getMetaData())) {
@@ -204,24 +237,13 @@ public class OracleClient
         }
     }
 
-    private static ResultSet getColumns(JdbcTableHandle tableHandle, DatabaseMetaData metadata)
-            throws SQLException
-    {
-        Optional<String> escape = Optional.ofNullable(metadata.getSearchStringEscape());
-        return metadata.getColumns(
-                tableHandle.getCatalogName(),
-                escapeNamePattern(Optional.ofNullable(tableHandle.getSchemaName()), escape).orElse(null),
-                escapeNamePattern(Optional.ofNullable(tableHandle.getTableName()), escape).orElse(null),
-                null);
-    }
-
     /**
      * Return an anonymous method that acts as a type mapper for the given column type.
      * Each method is called a ReadMapping, which reads data in and converts the JDBC type to a supported Presto Type
      * For more details see OracleReadMappings.java
-     *
+     * <p>
      * See: https://github.com/prestodb/presto/blob/3060c65a1812c6c8b0c2ab725b0184dbad67f0ed/presto-base-jdbc/src/main/java/com/facebook/presto/plugin/jdbc/StandardReadMappings.java
-     *
+     * <p>
      * JdbcRecordCursor is what calls this method
      *
      * @param session
@@ -253,19 +275,21 @@ public class OracleClient
                 try {
                     OracleNumberHandling numberHandling = new OracleNumberHandling(orcTypeHandle, this.oracleConfig);
                     readType = Optional.of(numberHandling.getReadMapping());
-                } catch (IgnoreFieldException ex) {
+                }
+                catch (IgnoreFieldException ex) {
                     return Optional.empty(); // skip field
-                } catch (PrestoException ex) {
-                    error  = ex.toString();
+                }
+                catch (PrestoException ex) {
+                    error = ex.toString();
                 }
                 break;
             default:
                 readType = super.toPrestoType(session, typeHandle);
         }
 
-        if(!readType.isPresent()) {
+        if (!readType.isPresent()) {
             String msg = String.format("unsupported type %s - %s", orcTypeHandle.getDescription(), error);
-            switch(oracleConfig.getUnsupportedTypeStrategy()) {
+            switch (oracleConfig.getUnsupportedTypeStrategy()) {
                 case VARCHAR:
                     readType = Optional.of(StandardReadMappings.varcharReadMapping(createUnboundedVarcharType()));
                     break;
@@ -274,7 +298,6 @@ public class OracleClient
                 case FAIL:
                     throw new PrestoException(StandardErrorCode.GENERIC_INTERNAL_ERROR,
                             msg + " - 'unsupported-type.handling-strategy' = FAIL");
-
             }
         }
         return readType;

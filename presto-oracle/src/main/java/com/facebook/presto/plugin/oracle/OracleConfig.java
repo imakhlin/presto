@@ -18,14 +18,19 @@ import com.facebook.presto.spi.type.Decimals;
 import io.airlift.configuration.Config;
 import io.airlift.units.Duration;
 
-import java.math.RoundingMode;
 import javax.validation.constraints.Min;
+
+import java.math.RoundingMode;
 import java.sql.JDBCType;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-import static com.facebook.presto.spi.StandardErrorCode.CONFIGURATION_INVALID;;
+import static com.facebook.presto.spi.StandardErrorCode.CONFIGURATION_INVALID;
 
 public class OracleConfig
 {
@@ -33,7 +38,7 @@ public class OracleConfig
     public static final int UNDEFINED_SCALE = OracleJdbcTypeHandle.UNDEFINED_SCALE;
     private static final JDBCType[] ALLOWED_NUMBER_DEFAULT_TYPES = {JDBCType.DECIMAL, JDBCType.DOUBLE, JDBCType.INTEGER, JDBCType.VARCHAR};
     private static final int MAX_DOUBLE_PRECISION = 15;
-    private boolean synonymsEnabled = false;
+    private boolean synonymsEnabled;
     private UnsupportedTypeHandling typeStrategy = UnsupportedTypeHandling.IGNORE;
     private boolean autoReconnect = true;
     private int maxReconnects = 3;
@@ -64,7 +69,9 @@ public class OracleConfig
         return this;
     }
 
-    /** Get unsupported-type.handling-strategy */
+    /**
+     * Get unsupported-type.handling-strategy
+     */
     public UnsupportedTypeHandling getUnsupportedTypeStrategy()
     {
         return typeStrategy;
@@ -82,13 +89,15 @@ public class OracleConfig
     {
         typeStrategy = typeStrategy.toUpperCase();
         this.typeStrategy = UnsupportedTypeHandling.valueOf(typeStrategy);
-        if(typeStrategy.equals(UnsupportedTypeHandling.ROUND)) {
+        if (typeStrategy.equals(UnsupportedTypeHandling.ROUND)) {
             throw new PrestoException(CONFIGURATION_INVALID, "ROUND is not a valid option for unsupported-type.handling-strategy");
         }
         return this;
     }
 
-    /** Get oracle.auto-reconnect */
+    /**
+     * Get oracle.auto-reconnect
+     */
     public boolean isAutoReconnect()
     {
         return autoReconnect;
@@ -101,7 +110,9 @@ public class OracleConfig
         return this;
     }
 
-    /** Get oracle.max-reconnects */
+    /**
+     * Get oracle.max-reconnects
+     */
     @Min(1)
     public int getMaxReconnects()
     {
@@ -115,7 +126,9 @@ public class OracleConfig
         return this;
     }
 
-    /** Get oracle.connection-timeout */
+    /**
+     * Get oracle.connection-timeout
+     */
     public Duration getConnectionTimeout()
     {
         return connectionTimeout;
@@ -128,7 +141,9 @@ public class OracleConfig
         return this;
     }
 
-    /** Get oracle.number.exceeds-limits */
+    /**
+     * Get oracle.number.exceeds-limits
+     */
     public UnsupportedTypeHandling getNumberExceedsLimitsMode()
     {
         return numberExceedsLimitsMode;
@@ -137,7 +152,7 @@ public class OracleConfig
     /**
      * Configure the driver to handle Oracle NUMBER type that exceeds Presto DECIMAL type size limits.
      * The default behavior is to ROUND.
-     *
+     * <p>
      * If the rounding fails, or there is some other conversion exception, behavior falls-back to
      * "unsupported-type.handling-strategy"
      *
@@ -152,10 +167,12 @@ public class OracleConfig
         return this;
     }
 
-
     // ------------------------------------------------------------------------
     // -- oracle.number.type-as fields ----------------------------------------
-    /** Get oracle.number.type.as-integer */
+
+    /**
+     * Get oracle.number.type.as-integer
+     */
     public List<OracleJdbcTypeHandle> getNumberAsIntegerTypes()
     {
         return numberAsIntegerTypes; // TODO
@@ -163,6 +180,7 @@ public class OracleConfig
 
     /**
      * These (PRECISION:SCALE) combinations will be treated as integers
+     *
      * @param precisions
      * @return
      */
@@ -174,7 +192,9 @@ public class OracleConfig
 
     // ------------------------------------------------------------------------
 
-    /** Get oracle.number.type.as-double*/
+    /**
+     * Get oracle.number.type.as-double
+     */
     public List<OracleJdbcTypeHandle> getNumberAsDoubleTypes()
     {
         return numberAsDoubleTypes; // TODO
@@ -182,6 +202,7 @@ public class OracleConfig
 
     /**
      * These (PRECISION:SCALE) combinations will be treated as double
+     *
      * @param precisions
      * @return
      */
@@ -193,7 +214,9 @@ public class OracleConfig
 
     // ------------------------------------------------------------------------
 
-    /** Get oracle.number.type.as-decimal*/
+    /**
+     * Get oracle.number.type.as-decimal
+     */
     public List<OracleJdbcTypeHandle> getNumberAsDecimalTypes()
     {
         return numberAsDecimalTypes; // TODO
@@ -201,6 +224,7 @@ public class OracleConfig
 
     /**
      * These (PRECISION:SCALE) combinations will be treated as decimal
+     *
      * @param precisions
      * @return
      */
@@ -213,7 +237,9 @@ public class OracleConfig
     // ------------------------------------------------------------------------
     // -- oracle.number.type fields -------------------------------------------
 
-    /** Get oracle.number.type.default */
+    /**
+     * Get oracle.number.type.default
+     */
     public JDBCType getNumberTypeDefault()
     {
         return numberTypeDefault;
@@ -228,7 +254,9 @@ public class OracleConfig
 
     // ------------------------------------------------------------------------
 
-    /** Get oracle.number.type.zero-scale-type */
+    /**
+     * Get oracle.number.type.zero-scale-type
+     */
     public JDBCType getNumberZeroScaleType()
     {
         return numberZeroScaleType;
@@ -244,9 +272,10 @@ public class OracleConfig
     @Config("oracle.number.type.zero-scale-type")
     public OracleConfig setNumberZeroScaleType(String typeName)
     {
-        if(typeName == null || typeName.isEmpty()) {
+        if (typeName == null || typeName.isEmpty()) {
             numberZeroScaleType = UNDEFINED_TYPE;
-        } else {
+        }
+        else {
             numberZeroScaleType = getNumericType(typeName);
         }
         return this;
@@ -254,7 +283,9 @@ public class OracleConfig
 
     // ------------------------------------------------------------------------
 
-    /** Get oracle.number.type.null-scale-type */
+    /**
+     * Get oracle.number.type.null-scale-type
+     */
     public JDBCType getNumberNullScaleType()
     {
         return numberNullScaleType;
@@ -264,7 +295,7 @@ public class OracleConfig
      * Oracle Number Handling - When scale is NULL, what type should be mapped to
      * Default behavior is to NOT map to any scale
      * This overrides "oracle.number.type.default"
-     *
+     * <p>
      * Defaults to UNDEFINED_TYPE
      *
      * @param typeName
@@ -273,9 +304,10 @@ public class OracleConfig
     @Config("oracle.number.type.null-scale-type")
     public OracleConfig setNumberNullScaleType(String typeName)
     {
-        if(typeName == null || typeName.isEmpty()) {
+        if (typeName == null || typeName.isEmpty()) {
             numberZeroScaleType = UNDEFINED_TYPE;
-        } else {
+        }
+        else {
             numberNullScaleType = getNumericType(typeName);
         }
         return this;
@@ -284,10 +316,12 @@ public class OracleConfig
     // ---------------------------------------------------------------------------
     // -- oracle.number.decimal fields -------------------------------------------
 
-    /** Get oracle.number.decimal.round-mode */
+    /**
+     * Get oracle.number.decimal.round-mode
+     */
     public RoundingMode getNumberDecimalRoundMode()
     {
-        if(getNumberExceedsLimitsMode().equals(UnsupportedTypeHandling.ROUND)
+        if (getNumberExceedsLimitsMode().equals(UnsupportedTypeHandling.ROUND)
                 && numberDecimalRoundMode.equals(RoundingMode.UNNECESSARY)) {
             throw new PrestoException(CONFIGURATION_INVALID, "'oracle.number.decimal.round-mode' must be set " +
                     "if 'oracle.number.exceeds-limits' is set to ROUND");
@@ -312,7 +346,9 @@ public class OracleConfig
     // ------------------------------------------------------------------------
     // -- oracle.number.decimal.default-scale fields --------------------------
 
-    /** Get oracle.number.decimal.default-scale.fixed */
+    /**
+     * Get oracle.number.decimal.default-scale.fixed
+     */
     public int getNumberDecimalDefaultScaleFixed()
     {
         return numberDecimalDefaultScaleFixed;
@@ -321,7 +357,7 @@ public class OracleConfig
     /**
      * When NUMBER type scale is NULL and conversion to DECIMAL is set,
      * EXPLICITLY set the scale to a fixed integer value.
-     *
+     * <p>
      * Note that scale cannot exceed Prestos maximum precision of 38
      *
      * @param numberScale
@@ -330,11 +366,11 @@ public class OracleConfig
     @Config("oracle.number.decimal.default-scale.fixed")
     public OracleConfig setNumberDecimalDefaultScaleFixed(int numberScale)
     {
-        if(numberScale == UNDEFINED_SCALE) {
+        if (numberScale == UNDEFINED_SCALE) {
             this.numberDecimalDefaultScaleFixed = UNDEFINED_SCALE;
             return this;
         }
-        if(numberScale > Decimals.MAX_PRECISION) {
+        if (numberScale > Decimals.MAX_PRECISION) {
             String msg = String.format("oracle.number.decimal.default-scale.fixed (%d) exceeds Prestos max: %d", numberScale, Decimals.MAX_PRECISION);
             throw new PrestoException(CONFIGURATION_INVALID, msg);
         }
@@ -344,7 +380,9 @@ public class OracleConfig
 
     // ------------------------------------------------------------------------
 
-    /** Get oracle.number.decimal.default-scale.ratio */
+    /**
+     * Get oracle.number.decimal.default-scale.ratio
+     */
     public float getNumberDecimalDefaultScaleRatio()
     {
         return numberDecimalDefaultScaleRatio;
@@ -354,11 +392,11 @@ public class OracleConfig
      * When NUMBER type scale is NULL and conversion to DECIMAL is set,
      * use a ratio-based scale.
      * The scale will be set as a fraction of the precision.
-     *
+     * <p>
      * Note that scale is only applied to data-types in Oracle in which scale has been left undefined.
-     *
+     * <p>
      * Examples of (precision, scale) combinations and what they will be mapped to given an input
-     *
+     * <p>
      * 0.5 => (40, null) => (38, 19)   // scale of 40 is capped at 38, half of 38 is 19.
      * 0.5 => (16, null) => (16, 8)
      * 0.5 => (16, 0)    => scale is set, ignored
@@ -371,15 +409,15 @@ public class OracleConfig
     @Config("oracle.number.decimal.default-scale.ratio")
     public OracleConfig setNumberDecimalDefaultScaleRatio(float numberScale)
     {
-        if(numberScale == (float) UNDEFINED_SCALE) {
+        if (numberScale == (float) UNDEFINED_SCALE) {
             this.numberDecimalDefaultScaleRatio = UNDEFINED_SCALE;
             return this;
         }
-        if(getNumberDecimalDefaultScaleFixed() != UNDEFINED_SCALE) {
+        if (getNumberDecimalDefaultScaleFixed() != UNDEFINED_SCALE) {
             String msg = String.format("oracle.number.decimal.default-scale.fixed is set, and conflicts with oracle.number.decimal.default-scale.ratio");
             throw new PrestoException(CONFIGURATION_INVALID, msg);
         }
-        if(numberScale >  1.0f) {
+        if (numberScale > 1.0f) {
             String msg = String.format("oracle.number.decimal.default-scale.ratio (%f) exceeds 1.0", numberScale, Decimals.MAX_PRECISION);
             throw new PrestoException(CONFIGURATION_INVALID, msg);
         }
@@ -389,7 +427,9 @@ public class OracleConfig
 
     // ------------------------------------------------------------------------
 
-    /** Get oracle.number.decimal.precision-map */
+    /**
+     * Get oracle.number.decimal.precision-map
+     */
     public Map<OracleJdbcTypeHandle, OracleJdbcTypeHandle> getNumberDecimalPrecisionMap()
     {
         return numberDecimalPrecisionMap;
@@ -400,13 +440,14 @@ public class OracleConfig
      * The input precision:scale values are the values that come from the database, use "null" to represent and
      * undefined precision or scale.
      * The output precision:scale pair will be the data type that is used within Presto
+     *
      * @param precisions a string such as "null:null=38:12, 16:8=38:14"
      * @return
      */
     @Config("oracle.number.decimal.precision-map")
     public OracleConfig setNumberDecimalPrecisionMap(String precisions)
     {
-        if(precisions == null || precisions.isEmpty()) {
+        if (precisions == null || precisions.isEmpty()) {
             return this;
         }
         return this;
@@ -418,10 +459,12 @@ public class OracleConfig
     // ------------------------------------------------------------------------
     // -- oracle.number.double fields -----------------------------------------
 
-    /** Get oracle.number.double.round-mode */
+    /**
+     * Get oracle.number.double.round-mode
+     */
     public RoundingMode getNumberDoubleRoundMode()
     {
-        if(getNumberExceedsLimitsMode().equals(UnsupportedTypeHandling.ROUND)
+        if (getNumberExceedsLimitsMode().equals(UnsupportedTypeHandling.ROUND)
                 && numberDecimalRoundMode.equals(RoundingMode.UNNECESSARY)) {
             throw new PrestoException(CONFIGURATION_INVALID, "'oracle.number.decimal.round-mode' must be set " +
                     "if 'oracle.number.exceeds-limits' is set to ROUND");
@@ -445,7 +488,9 @@ public class OracleConfig
 
     // ------------------------------------------------------------------------
 
-    /** Get oracle.number.double.default-scale.fixed */
+    /**
+     * Get oracle.number.double.default-scale.fixed
+     */
     public int getNumberDoubleDefaultScaleFixed()
     {
         return numberDoubleDefaultScaleFixed;
@@ -454,7 +499,7 @@ public class OracleConfig
     /**
      * When NUMBER type scale is NULL and conversion to DECIMAL is set,
      * EXPLICITLY set the scale to a fixed integer value.
-     *
+     * <p>
      * Note that scale cannot exceed Prestos maximum precision of 38
      *
      * @param doubleScale
@@ -463,11 +508,11 @@ public class OracleConfig
     @Config("oracle.number.double.default-scale.fixed")
     public OracleConfig setNumberDoubleDefaultScaleFixed(int doubleScale)
     {
-        if(doubleScale == UNDEFINED_SCALE) {
+        if (doubleScale == UNDEFINED_SCALE) {
             this.numberDoubleDefaultScaleFixed = UNDEFINED_SCALE;
             return this;
         }
-        if(doubleScale > MAX_DOUBLE_PRECISION) {
+        if (doubleScale > MAX_DOUBLE_PRECISION) {
             String msg = String.format("oracle.number.double.default-scale.fixed (%d) exceeds javas Double type max: %d", doubleScale, MAX_DOUBLE_PRECISION);
             throw new PrestoException(CONFIGURATION_INVALID, msg);
         }
@@ -487,21 +532,20 @@ public class OracleConfig
         typeName = typeName.toUpperCase();
         JDBCType jdbcType = JDBCType.valueOf(typeName);
         boolean isAllowedType = Arrays.stream(ALLOWED_NUMBER_DEFAULT_TYPES).anyMatch(jdbcType::equals);
-        if(!isAllowedType) {
+        if (!isAllowedType) {
             List<String> allowedVals = Arrays.stream(ALLOWED_NUMBER_DEFAULT_TYPES)
                     .map(JDBCType::getName)
                     .collect(Collectors.toList());
 
             throw new PrestoException(CONFIGURATION_INVALID,
                     String.format("'%s' is not valid for oracle.number.type.default %nAllowed Values: %s", typeName, allowedVals));
-
         }
         return jdbcType;
     }
 
-    public boolean isDecimalDefaultScaleConfigured() {
+    public boolean isDecimalDefaultScaleConfigured()
+    {
         return (getNumberDecimalDefaultScaleFixed() != UNDEFINED_SCALE ||
                 getNumberDecimalDefaultScaleRatio() != UNDEFINED_SCALE);
     }
-
 }

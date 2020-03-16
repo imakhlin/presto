@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.plugin.oracle;
 
-public enum UnsupportedTypeHandling {
-   FAIL, IGNORE, VARCHAR, ROUND
+public enum UnsupportedTypeHandling
+{
+    FAIL, IGNORE, VARCHAR, ROUND
 }

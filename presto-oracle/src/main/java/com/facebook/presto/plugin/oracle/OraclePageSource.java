@@ -19,29 +19,14 @@ import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordSet;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.type.BigintType;
-import com.facebook.presto.spi.type.DateType;
-import com.facebook.presto.spi.type.DecimalType;
-import com.facebook.presto.spi.type.IntegerType;
-import com.facebook.presto.spi.type.RealType;
-import com.facebook.presto.spi.type.SmallintType;
-import com.facebook.presto.spi.type.TimeType;
-import com.facebook.presto.spi.type.TimestampType;
-import com.facebook.presto.spi.type.TinyintType;
 import com.facebook.presto.spi.type.Type;
 import io.airlift.slice.Slice;
-import org.joda.time.chrono.ISOChronology;
 
-import java.math.BigDecimal;
-import java.sql.Date;
-import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 import static java.util.Collections.unmodifiableList;
 import static java.util.Objects.requireNonNull;
-import static org.joda.time.DateTimeZone.UTC;
 
 // https://github.com/prestodb/presto/blob/release-0.225/presto-spi/src/main/java/com/facebook/presto/spi/ConnectorPageSource.java
 
@@ -64,7 +49,7 @@ public class OraclePageSource
 
     public OraclePageSource(List<Type> types, RecordCursor cursor)
     {
-        this.cursor = (OracleRecordCursor)requireNonNull(cursor, "cursor is null");
+        this.cursor = (OracleRecordCursor) requireNonNull(cursor, "cursor is null");
         this.types = unmodifiableList(new ArrayList<>(requireNonNull(types, "types is null")));
         this.pageBuilder = new PageBuilder(this.types);
     }
@@ -107,6 +92,7 @@ public class OraclePageSource
 
     /**
      * Because we have custom read functions, the JDBC Driver tpye returned may be different than
+     *
      * @return
      */
     @Override
@@ -139,14 +125,18 @@ public class OraclePageSource
 
                     if (javaType == boolean.class) {
                         type.writeBoolean(output, cursor.getBoolean(column));
-                    } else if (javaType == long.class) {
+                    }
+                    else if (javaType == long.class) {
                         type.writeLong(output, cursor.getLong(column));
-                    } else if (javaType == double.class) {
+                    }
+                    else if (javaType == double.class) {
                         type.writeDouble(output, cursor.getDouble(column));
-                    } else if (javaType == Slice.class) {
+                    }
+                    else if (javaType == Slice.class) {
                         Slice slice = cursor.getSlice(column);
                         type.writeSlice(output, slice, 0, slice.length());
-                    } else {
+                    }
+                    else {
                         type.writeObject(output, cursor.getObject(column));
                     }
                 }

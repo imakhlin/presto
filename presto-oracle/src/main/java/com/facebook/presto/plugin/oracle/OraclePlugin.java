@@ -32,14 +32,14 @@ public class OraclePlugin
         this.module = new OracleClientModule();
     }
 
+    private static ClassLoader getClassLoader()
+    {
+        return firstNonNull(Thread.currentThread().getContextClassLoader(), OraclePlugin.class.getClassLoader());
+    }
+
     @Override
     public Iterable<ConnectorFactory> getConnectorFactories()
     {
         return ImmutableList.of(new OracleConnectorFactory(name, module, getClassLoader()));
-    }
-
-    private static ClassLoader getClassLoader()
-    {
-        return firstNonNull(Thread.currentThread().getContextClassLoader(), OraclePlugin.class.getClassLoader());
     }
 }

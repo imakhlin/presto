@@ -13,8 +13,18 @@
  */
 package com.facebook.presto.plugin.oracle;
 
-import com.facebook.presto.plugin.jdbc.*;
-import com.facebook.presto.spi.type.*;
+import com.facebook.presto.plugin.jdbc.BooleanReadFunction;
+import com.facebook.presto.plugin.jdbc.DoubleReadFunction;
+import com.facebook.presto.plugin.jdbc.LongReadFunction;
+import com.facebook.presto.plugin.jdbc.ReadFunction;
+import com.facebook.presto.plugin.jdbc.ReadMapping;
+import com.facebook.presto.plugin.jdbc.SliceReadFunction;
+import com.facebook.presto.spi.type.CharType;
+import com.facebook.presto.spi.type.DecimalType;
+import com.facebook.presto.spi.type.Decimals;
+import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.type.VarbinaryType;
+import com.facebook.presto.spi.type.VarcharType;
 import io.airlift.slice.Slice;
 import org.mockito.Mockito;
 import org.testng.annotations.Test;
@@ -23,13 +33,15 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Locale;
 
 import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
-import static com.facebook.presto.spi.type.Decimals.encodeScaledValue;
 import static com.facebook.presto.spi.type.Decimals.encodeUnscaledValue;
 import static com.facebook.presto.spi.type.UnscaledDecimal128Arithmetic.unscaledDecimalToBigInteger;
 import static java.lang.String.format;
-import static org.testng.Assert.*;
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertThrows;
+import static org.testng.Assert.fail;
 
 public class TestOracleReadMappings
 {
@@ -37,77 +49,32 @@ public class TestOracleReadMappings
     private DecimalType dec8Scale = createDecimalType(Decimals.MAX_PRECISION, 8);
     private DecimalType dec15Scale = createDecimalType(Decimals.MAX_PRECISION, 15);
 
-    @Test void testType()
+    public static ResultSet getMockResultSet(int columnIndex, Object value)
     {
-        ReadMapping read = OracleReadMappings.roundDecimalReadMapping(dec2Scale, RoundingMode.UP);
-        assertEquals(read.getType().getJavaType(), Slice.class);
-    }
-
-    @Test void testRound()
-    {
-        ReadMapping roundDecimal2 = OracleReadMappings.roundDecimalReadMapping(dec2Scale, RoundingMode.UP);
-        ReadMapping roundDecimal8 = OracleReadMappings.roundDecimalReadMapping(dec8Scale, RoundingMode.UP);
-        ReadMapping roundDecimal15 = OracleReadMappings.roundDecimalReadMapping(dec15Scale, RoundingMode.UP);
-
-        assertSliceReadMappingRoundTrip(new BigDecimal("1.00"), new BigDecimal("1"), roundDecimal2, dec2Scale);
-        assertSliceReadMappingRoundTrip(new BigDecimal("1.00"), new BigDecimal("1.0"), roundDecimal2, dec2Scale);
-        assertSliceReadMappingRoundTrip(new BigDecimal("1.20"), new BigDecimal("1.199"), roundDecimal2, dec2Scale);
-        assertSliceReadMappingRoundTrip(new BigDecimal("0.10"), new BigDecimal("0.099"), roundDecimal2, dec2Scale);
-
-        assertSliceReadMappingRoundTrip(new BigDecimal("1.12345679"), new BigDecimal("1.123456789"), roundDecimal8, dec8Scale);
-        assertSliceReadMappingRoundTrip(new BigDecimal("0.00000002"), new BigDecimal("0.000000019"), roundDecimal8, dec8Scale);
-        assertSliceReadMappingRoundTrip(new BigDecimal("100.00000001"), new BigDecimal("100.000000009"), roundDecimal8, dec8Scale);
-        assertSliceReadMappingRoundTrip(new BigDecimal("500.00000000"), new BigDecimal("500"), roundDecimal8, dec8Scale);
-
-        assertSliceReadMappingRoundTrip(new BigDecimal("0.68" + repeat("0", 13)), new BigDecimal("0.680"), roundDecimal15, dec15Scale);
-        assertSliceReadMappingRoundTrip(new BigDecimal("98765.1" + repeat("0", 14)), new BigDecimal("98765.10"), roundDecimal15, dec15Scale);
-    }
-
-    private void assertSliceReadMappingRoundTrip(BigDecimal correctValue, BigDecimal testInput, ReadMapping readMapping, DecimalType decimalType) {
-        try {
-            int scale = decimalType.getScale();
-            ResultSet rs = getMockResultSet(0, testInput);
-            SliceReadFunction readFn = (SliceReadFunction) readMapping.getReadFunction();
-            Slice testSlice = readFn.readSlice(rs, 0);
-            Slice correctSlice = encodeUnscaledValue(correctValue.unscaledValue());
-
-            String testVal = Decimals.toString(testSlice, scale);
-            String correctVal = Decimals.toString(correctSlice, scale);
-            if(!testSlice.equals(correctSlice)) {
-                fail(format("Slice values do not match => expected: %s, sliceOutput: %s", correctVal, testVal));
-            }
-            if(!testVal.equals(correctVal)) {
-                fail(format("Slice (text) values do not match => expected: %s, sliceOutput: %s", correctVal, testVal));
-            }
-            BigDecimal decVal = toBigDecimal(testSlice, scale);
-            BigDecimal decCorrect = toBigDecimal(correctSlice, scale);
-            if(!decVal.equals(decCorrect)) {
-                fail(format("Slice (decimal) values do not match => expected: %s, sliceOutput: %s", decCorrect, decVal));
-            }
-        } catch (SQLException ex) {
-            throw new RuntimeException(ex);
-        }
-    }
-
-    public static ResultSet getMockResultSet(int columnIndex, Object value) {
         ResultSet resultSetMock = Mockito.mock(ResultSet.class);
         try {
-            if(value instanceof BigDecimal) {
+            if (value instanceof BigDecimal) {
                 Mockito.when(resultSetMock.getBigDecimal(columnIndex)).thenReturn((BigDecimal) value);
-            } else if (value instanceof Double) {
+            }
+            else if (value instanceof Double) {
                 Mockito.when(resultSetMock.getDouble(columnIndex)).thenReturn((Double) value);
-            } else if (value instanceof Long) {
+            }
+            else if (value instanceof Long) {
                 Mockito.when(resultSetMock.getLong(columnIndex)).thenReturn((Long) value);
-            } else if (value instanceof Boolean) {
+            }
+            else if (value instanceof Boolean) {
                 Mockito.when(resultSetMock.getBoolean(columnIndex)).thenReturn((Boolean) value);
-            } else if (value instanceof Short) {
+            }
+            else if (value instanceof Short) {
                 Mockito.when(resultSetMock.getShort(columnIndex)).thenReturn((Short) value);
-            } else if (value instanceof Integer) {
+            }
+            else if (value instanceof Integer) {
                 Mockito.when(resultSetMock.getInt(columnIndex)).thenReturn((Integer) value);
             }
             // provide a getString() version always
             Mockito.when(resultSetMock.getString(columnIndex)).thenReturn((String) value.toString());
-        } catch (SQLException ex) {
+        }
+        catch (SQLException ex) {
             throw new RuntimeException(ex);
         }
 
@@ -121,30 +88,31 @@ public class TestOracleReadMappings
 
     public static void assertPrestoTypeEquals(Type t1, Type t2)
     {
-        if(!t1.getClass().equals(t2.getClass())) {
+        if (!t1.getClass().equals(t2.getClass())) {
             fail(format("Presto data-types are not identical expected [%s] but found [%s]", t1.getClass(), t2.getClass()));
         }
-        if(t1 instanceof DecimalType) {
+        if (t1 instanceof DecimalType) {
             DecimalType t1Dec = (DecimalType) t1;
             DecimalType t2Dec = (DecimalType) t2;
-            if(t1Dec.getPrecision() != t2Dec.getPrecision()
+            if (t1Dec.getPrecision() != t2Dec.getPrecision()
                     || t1Dec.getScale() != t2Dec.getScale()) {
                 fail(format("Presto DecimalTypes not identical expected [%s] but found [%s]", t1Dec, t2Dec));
             }
         }
     }
 
-    private static String repeat(String value, int times) {
-        return String.format("%0" + times  + "d", 0).replace("0", value);
+    private static String repeat(String value, int times)
+    {
+        return String.format("%0" + times + "d", 0).replace("0", value);
     }
 
     public static void assertPrestoReadFunctionEquals(ReadFunction r1, ReadFunction r2, Type prestoType)
     {
-        if(!r1.getClass().equals(r2.getClass())) {
+        if (!r1.getClass().equals(r2.getClass())) {
             fail(format("ReadFunctions (class types) are not identical, expected [%s] but found [%s]", r1, r2, r1.getClass(), r2.getClass()));
         }
 
-        if(!r1.getJavaType().equals(r2.getJavaType())) {
+        if (!r1.getJavaType().equals(r2.getJavaType())) {
             fail(format("ReadFunctions 1:%s - 2:%s (return types) are not identical, expected [%s] but found [%s]", r1, r2, r1.getJavaType(), r1.getJavaType()));
         }
 
@@ -169,7 +137,7 @@ public class TestOracleReadMappings
             assertEquals(sliceR1.getJavaType(), sliceR2.getJavaType());
             Object value;
 
-            if(prestoType instanceof DecimalType) {
+            if (prestoType instanceof DecimalType) {
                 DecimalType decType = (DecimalType) prestoType;
                 // create a value that will fit the given decimal type, and one that won't
                 String zeros0 = repeat("9", decType.getScale());
@@ -179,22 +147,29 @@ public class TestOracleReadMappings
 
                 // If the value needs rounding, reduce the decimal scale to a value that will fit prestoType
                 // this portion of the logic is specific to Oracle (we support rounding)
-                try { sliceR1.readSlice(getMockResultSet(0, value), 0); }
-                catch (SQLException ex) { throw new RuntimeException(ex); }
+                try {
+                    sliceR1.readSlice(getMockResultSet(0, value), 0);
+                }
+                catch (SQLException ex) {
+                    throw new RuntimeException(ex);
+                }
                 catch (ArithmeticException ex) {
-                    if (!ex.getMessage().toLowerCase().contains("rounding necessary")) {
+                    if (!ex.getMessage().toLowerCase(Locale.ENGLISH).contains("rounding necessary")) {
                         throw ex;
                     }
                     value = new BigDecimal("123." + zeros0);
                 }
-
-            } else if (prestoType instanceof CharType) {
-                value = new Character('a');
-            } else if (prestoType instanceof VarcharType) {
+            }
+            else if (prestoType instanceof CharType) {
+                value = Character.valueOf('a');
+            }
+            else if (prestoType instanceof VarcharType) {
                 value = new String("a string");
-            } else if (prestoType instanceof VarbinaryType) {
+            }
+            else if (prestoType instanceof VarbinaryType) {
                 value = new Byte("a binary string");
-            } else {
+            }
+            else {
                 throw new RuntimeException("unsupported Slice type: " + prestoType.toString());
             }
 
@@ -204,7 +179,8 @@ public class TestOracleReadMappings
             try {
                 s1 = sliceR1.readSlice(rs, 0);
                 s2 = sliceR2.readSlice(rs, 0);
-            } catch (SQLException ex) {
+            }
+            catch (SQLException ex) {
                 throw new RuntimeException(ex);
             }
 
@@ -221,5 +197,61 @@ public class TestOracleReadMappings
     public static void assertReadMappingNotEquals(ReadMapping r1, ReadMapping r2)
     {
         assertThrows(AssertionError.class, () -> TestOracleReadMappings.assertReadMappingEquals(r1, r2));
+    }
+
+    @Test
+    void testType()
+    {
+        ReadMapping read = OracleReadMappings.roundDecimalReadMapping(dec2Scale, RoundingMode.UP);
+        assertEquals(read.getType().getJavaType(), Slice.class);
+    }
+
+    @Test
+    void testRound()
+    {
+        ReadMapping roundDecimal2 = OracleReadMappings.roundDecimalReadMapping(dec2Scale, RoundingMode.UP);
+        ReadMapping roundDecimal8 = OracleReadMappings.roundDecimalReadMapping(dec8Scale, RoundingMode.UP);
+        ReadMapping roundDecimal15 = OracleReadMappings.roundDecimalReadMapping(dec15Scale, RoundingMode.UP);
+
+        assertSliceReadMappingRoundTrip(new BigDecimal("1.00"), new BigDecimal("1"), roundDecimal2, dec2Scale);
+        assertSliceReadMappingRoundTrip(new BigDecimal("1.00"), new BigDecimal("1.0"), roundDecimal2, dec2Scale);
+        assertSliceReadMappingRoundTrip(new BigDecimal("1.20"), new BigDecimal("1.199"), roundDecimal2, dec2Scale);
+        assertSliceReadMappingRoundTrip(new BigDecimal("0.10"), new BigDecimal("0.099"), roundDecimal2, dec2Scale);
+
+        assertSliceReadMappingRoundTrip(new BigDecimal("1.12345679"), new BigDecimal("1.123456789"), roundDecimal8, dec8Scale);
+        assertSliceReadMappingRoundTrip(new BigDecimal("0.00000002"), new BigDecimal("0.000000019"), roundDecimal8, dec8Scale);
+        assertSliceReadMappingRoundTrip(new BigDecimal("100.00000001"), new BigDecimal("100.000000009"), roundDecimal8, dec8Scale);
+        assertSliceReadMappingRoundTrip(new BigDecimal("500.00000000"), new BigDecimal("500"), roundDecimal8, dec8Scale);
+
+        assertSliceReadMappingRoundTrip(new BigDecimal("0.68" + repeat("0", 13)), new BigDecimal("0.680"), roundDecimal15, dec15Scale);
+        assertSliceReadMappingRoundTrip(new BigDecimal("98765.1" + repeat("0", 14)), new BigDecimal("98765.10"), roundDecimal15, dec15Scale);
+    }
+
+    private void assertSliceReadMappingRoundTrip(BigDecimal correctValue, BigDecimal testInput, ReadMapping readMapping, DecimalType decimalType)
+    {
+        try {
+            int scale = decimalType.getScale();
+            ResultSet rs = getMockResultSet(0, testInput);
+            SliceReadFunction readFn = (SliceReadFunction) readMapping.getReadFunction();
+            Slice testSlice = readFn.readSlice(rs, 0);
+            Slice correctSlice = encodeUnscaledValue(correctValue.unscaledValue());
+
+            String testVal = Decimals.toString(testSlice, scale);
+            String correctVal = Decimals.toString(correctSlice, scale);
+            if (!testSlice.equals(correctSlice)) {
+                fail(format("Slice values do not match => expected: %s, sliceOutput: %s", correctVal, testVal));
+            }
+            if (!testVal.equals(correctVal)) {
+                fail(format("Slice (text) values do not match => expected: %s, sliceOutput: %s", correctVal, testVal));
+            }
+            BigDecimal decVal = toBigDecimal(testSlice, scale);
+            BigDecimal decCorrect = toBigDecimal(correctSlice, scale);
+            if (!decVal.equals(decCorrect)) {
+                fail(format("Slice (decimal) values do not match => expected: %s, sliceOutput: %s", decCorrect, decVal));
+            }
+        }
+        catch (SQLException ex) {
+            throw new RuntimeException(ex);
+        }
     }
 }

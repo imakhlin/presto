@@ -13,18 +13,17 @@
  */
 package com.facebook.presto.plugin.oracle;
 
-import com.facebook.presto.spi.type.DoubleType;
-import com.facebook.presto.spi.type.VarcharType;
 import com.facebook.presto.plugin.jdbc.ReadMapping;
 import com.facebook.presto.spi.type.DecimalType;
 import com.facebook.presto.spi.type.Decimals;
-import io.airlift.log.Logger;
-
-import static io.airlift.slice.Slices.utf8Slice;
+import com.facebook.presto.spi.type.DoubleType;
+import com.facebook.presto.spi.type.VarcharType;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.Objects;
+
+import static io.airlift.slice.Slices.utf8Slice;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Methods that deal with Oracle specific functionality around ReadMappings.
@@ -32,10 +31,17 @@ import java.util.Objects;
  * These methods convert JDBC types to Presto supported types.
  * This logic is used in OracleNumberHandling.java
  */
-public class OracleReadMappings {
+class OracleReadMappings
+{
+    protected OracleReadMappings()
+    {
+        // prevents calls from subclass
+        throw new UnsupportedOperationException();
+    }
+
     /**
      * ReadMapping that rounds decimals and sets PRECISION and SCALE explicitly.
-     *
+     * <p>
      * In the event the Precision of a NUMERIC or DECIMAL from Oracle exceeds the supported precision of Presto's
      * Decimal Type, we will ROUND / Truncate the Decimal Type.
      *
@@ -43,9 +49,10 @@ public class OracleReadMappings {
      * @param round
      * @return
      */
-    public static ReadMapping roundDecimalReadMapping(DecimalType decimalType, RoundingMode round) {
-        Objects.requireNonNull(decimalType, "decimalType is null");
-        Objects.requireNonNull(round, "round is null");
+    protected static ReadMapping roundDecimalReadMapping(DecimalType decimalType, RoundingMode round)
+    {
+        requireNonNull(decimalType, "decimalType is null");
+        requireNonNull(round, "round is null");
         return ReadMapping.sliceReadMapping(decimalType, (resultSet, columnIndex) -> {
             int scale = decimalType.getScale();
             BigDecimal dec = resultSet.getBigDecimal(columnIndex);
@@ -63,8 +70,9 @@ public class OracleReadMappings {
      * @param round
      * @return
      */
-    public static ReadMapping roundDoubleReadMapping(int scale, RoundingMode round) {
-        Objects.requireNonNull(round, "round is null");
+    protected static ReadMapping roundDoubleReadMapping(int scale, RoundingMode round)
+    {
+        requireNonNull(round, "round is null");
         return ReadMapping.doubleReadMapping(DoubleType.DOUBLE, (resultSet, columnIndex) -> {
             BigDecimal value = resultSet.getBigDecimal(columnIndex);
             value = value.setScale(scale, round); // round to ensure the decimal value will fit in a double
@@ -78,7 +86,8 @@ public class OracleReadMappings {
      * @param varcharType
      * @return
      */
-    public static ReadMapping decimalVarcharReadMapping(VarcharType varcharType) {
+    protected static ReadMapping decimalVarcharReadMapping(VarcharType varcharType)
+    {
         return ReadMapping.sliceReadMapping(varcharType, (resultSet, columnIndex) -> {
             BigDecimal dec = resultSet.getBigDecimal(columnIndex);
             return utf8Slice(dec.toString());
