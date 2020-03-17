@@ -15,6 +15,7 @@ package com.facebook.presto.plugin.oracle;
 
 import com.facebook.presto.plugin.jdbc.BaseJdbcClient;
 import com.facebook.presto.plugin.jdbc.BaseJdbcConfig;
+import com.facebook.presto.plugin.jdbc.ConnectionFactory;
 import com.facebook.presto.plugin.jdbc.DriverConnectionFactory;
 import com.facebook.presto.plugin.jdbc.JdbcColumnHandle;
 import com.facebook.presto.plugin.jdbc.JdbcConnectorId;
@@ -45,7 +46,9 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Properties;
 
+import static com.facebook.presto.plugin.jdbc.DriverConnectionFactory.basicConnectionProperties;
 import static com.facebook.presto.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
 import static com.facebook.presto.plugin.jdbc.StandardReadMappings.timestampReadMapping;
 import static com.facebook.presto.plugin.jdbc.StandardReadMappings.varcharReadMapping;
@@ -70,8 +73,23 @@ public class OracleClient
     public OracleClient(JdbcConnectorId connectorId, BaseJdbcConfig config, OracleConfig oracleConfig)
             throws SQLException
     {
-        super(connectorId, config, Character.toString('"'), new DriverConnectionFactory(new OracleDriver(), config));
+        super(connectorId, config, Character.toString('"'), connectionFactory(config, oracleConfig));
         this.oracleConfig = oracleConfig;
+    }
+
+    private static ConnectionFactory connectionFactory(BaseJdbcConfig config, OracleConfig oracleConfig)
+    {
+        Properties connectionProperties = basicConnectionProperties(config);
+        connectionProperties.setProperty("timezoneAsRegion", "false");
+        if (oracleConfig.isAutoReconnect()) {
+            connectionProperties.setProperty("autoReconnect", String.valueOf(oracleConfig.isAutoReconnect()));
+            connectionProperties.setProperty("maxReconnects", String.valueOf(oracleConfig.getMaxReconnects()));
+        }
+        if (oracleConfig.getConnectionTimeout() != null) {
+            connectionProperties.setProperty("connectTimeout", String.valueOf(oracleConfig.getConnectionTimeout().toMillis()));
+        }
+
+        return new DriverConnectionFactory(new OracleDriver(), config.getConnectionUrl(), connectionProperties);
     }
 
     private static ResultSet getColumns(JdbcTableHandle tableHandle, DatabaseMetaData metadata)
