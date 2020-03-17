@@ -80,7 +80,7 @@ public class OracleClient
     private static ConnectionFactory connectionFactory(BaseJdbcConfig config, OracleConfig oracleConfig)
     {
         Properties connectionProperties = basicConnectionProperties(config);
-        connectionProperties.setProperty("timezoneAsRegion", "false");
+        connectionProperties.setProperty("oracle.jdbc.timezoneAsRegion", "false");
         if (oracleConfig.isAutoReconnect()) {
             connectionProperties.setProperty("autoReconnect", String.valueOf(oracleConfig.isAutoReconnect()));
             connectionProperties.setProperty("maxReconnects", String.valueOf(oracleConfig.getMaxReconnects()));
@@ -89,6 +89,7 @@ public class OracleClient
             connectionProperties.setProperty("connectTimeout", String.valueOf(oracleConfig.getConnectionTimeout().toMillis()));
         }
 
+        LOG.info("connectionProperties: %s", connectionProperties.toString());
         return new DriverConnectionFactory(new OracleDriver(), config.getConnectionUrl(), connectionProperties);
     }
 
